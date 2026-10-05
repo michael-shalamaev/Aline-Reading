@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --ok:#1a7f37; --bad:#c62828; --wait:#8a8a8a; --bg:#f6f7f9; --card:#fff; --text:#1c1c1e; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; font-family: system-ui, Arial, sans-serif; background:var(--bg); color:var(--text); font-size:17px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.sub { margin:0 0 16px; color:#555; font-size:15px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .row { display:flex; align-items:center; gap:10px; }
+  .dot { width:14px; height:14px; border-radius:50%; background:var(--wait); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  .title { font-weight:600; }
+  .detail { margin-top:6px; font-size:14px; color:#444; word-break:break-word; }
+  button { width:100%; margin-top:10px; padding:12px; font-size:17px; border:0; border-radius:10px; background:#2f6fed; color:#fff; }
+  button:disabled { background:#b5c4e8; }
+  .en { direction:ltr; text-align:left; font-size:20px; font-weight:600; padding:8px 0; }
+  .heard { direction:ltr; text-align:left; min-height:24px; font-size:18px; color:#2f6fed; }
+  audio { width:100%; margin-top:8px; }
+  #summary { font-weight:700; font-size:18px; }
+</style>
+</head>
+<body>
+  <h1>בדיקת מיקרופון</h1>
+  <p class="sub">לחץ על הכפתורים לפי הסדר. בסוף צלם את המסך ושלח לי.</p>
+
+  <div class="card">
+    <div class="row"><div class="dot" id="d1"></div><div class="title">1. גישה למיקרופון</div></div>
+    <div class="detail" id="t1">עוד לא נבדק</div>
+    <button id="b1">בקש גישה למיקרופון</button>
+  </div>
+
+  <div class="card">
+    <div class="row"><div class="dot" id="d2"></div><div class="title">2. הקלטה והשמעה</div></div>
+    <div class="detail" id="t2">מקליט חמש שניות ומשמיע בחזרה</div>
+    <button id="b2">הקלט חמש שניות</button>
+    <audio id="player" controls hidden></audio>
+  </div>
+
+  <div class="card">
+    <div class="row"><div class="dot" id="d3"></div><div class="title">3. זיהוי דיבור באנגלית</div></div>
+    <div class="detail">לחץ והקרא בקול:</div>
+    <div class="en">The little cat sat on the warm red mat.</div>
+    <div class="heard" id="heard"></div>
+    <div class="detail" id="t3">עוד לא נבדק</div>
+    <button id="b3">התחל לזהות</button>
+  </div>
+
+  <div class="card">
+    <div class="title">סיכום</div>
+    <div class="detail" id="summary">ממתין לבדיקות</div>
+    <div class="detail" id="env"></div>
+  </div>
+
+<script>
+const results = { mic: null, rec: null, speech: null };
+const $ = id => document.getElementById(id);
+
+function mark(n, ok, text) {
+  $('d' + n).className = 'dot ' + (ok ? 'ok' : 'bad');
+  $('t' + n).textContent = text;
+  updateSummary();
+}
+
+function updateSummary() {
+  const names = { mic: 'מיקרופון', rec: 'הקלטה', speech: 'זיהוי דיבור' };
+  const parts = Object.keys(results).map(k =>
+    names[k] + ': ' + (results[k] === null ? 'לא נבדק' : results[k] ? 'עובד' : 'נכשל'));
+  $('summary').textContent = parts.join(' | ');
+}
+
+$('env').textContent =
+  'הקשר מאובטח: ' + (window.isSecureContext ? 'כן' : 'לא') +
+  ' | בתוך מסגרת: ' + (window.top !== window.self ? 'כן' : 'לא') +
+  ' | זיהוי דיבור קיים: ' + ((window.SpeechRecognition || window.webkitSpeechRecognition) ? 'כן' : 'לא') +
+  ' | ' + navigator.userAgent;
+
+// 1. Microphone permission
+$('b1').onclick = async () => {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('getUserMedia unavailable');
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+    results.mic = true;
+    mark(1, true, 'הגישה אושרה');
+  } catch (e) {
+    results.mic = false;
+    mark(1, false, 'נכשל: ' + e.name + ' ' + e.message);
+  }
+};
+
+// 2. Record 5 seconds and play back
+$('b2').onclick = async () => {
+  const btn = $('b2');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const rec = new MediaRecorder(stream);
+    const chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: rec.mimeType });
+      const p = $('player');
+      p.src = URL.createObjectURL(blob);
+      p.hidden = false;
+      results.rec = blob.size > 0;
+      mark(2, blob.size > 0, blob.size > 0
+        ? 'הוקלט בהצלחה. לחץ נגן כדי לשמוע. פורמט: ' + rec.mimeType
+        : 'ההקלטה ריקה');
+      btn.disabled = false; btn.textContent = 'הקלט שוב';
+    };
+    rec.start();
+    btn.disabled = true; btn.textContent = 'מקליט...';
+    setTimeout(() => rec.stop(), 5000);
+  } catch (e) {
+    results.rec = false;
+    mark(2, false, 'נכשל: ' + e.name + ' ' + e.message);
+  }
+};
+
+// 3. Built-in speech recognition
+$('b3').onclick = () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { results.speech = false; mark(3, false, 'הדפדפן לא תומך בזיהוי דיבור'); return; }
+  const r = new SR();
+  r.lang = 'en-US';
+  r.interimResults = true;
+  r.continuous = false;
+  let finalText = '';
+  r.onresult = e => {
+    let t = '';
+    for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+    $('heard').textContent = t;
+    if (e.results[e.results.length - 1].isFinal) finalText = t;
+  };
+  r.onerror = e => { results.speech = false; mark(3, false, 'נכשל: ' + e.error); };
+  r.onend = () => {
+    $('b3').disabled = false; $('b3').textContent = 'נסה שוב';
+    if (results.speech === false && !finalText) return;
+    if (finalText) { results.speech = true; mark(3, true, 'זוהה בהצלחה'); }
+    else if (results.speech !== false) { results.speech = false; mark(3, false, 'לא זוהה דיבור'); }
+  };
+  results.speech = null;
+  $('heard').textContent = '';
+  $('b3').disabled = true; $('b3').textContent = 'מקשיב...';
+  r.start();
+};
+</script>
+</body>
+</html>
