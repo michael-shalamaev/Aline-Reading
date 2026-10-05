@@ -9,7 +9,13 @@ const CODE_KEY = 'reading_code';
 const code = (() => {
   const fromLink = new URLSearchParams(location.search).get('k');
   try {
-    if (fromLink) localStorage.setItem(CODE_KEY, fromLink);
+    if (fromLink) {
+      localStorage.setItem(CODE_KEY, fromLink);
+      // Saved: take it out of the address bar, so it is not on screen or in a shared link.
+      const url = new URL(location.href);
+      url.searchParams.delete('k');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
     return fromLink || localStorage.getItem(CODE_KEY) || '';
   } catch {
     return fromLink || '';
