@@ -1,152 +1,101 @@
-<!DOCTYPE html>
-<html dir="rtl" lang="he">
+<!doctype html>
+<html lang="he" dir="rtl">
 <head>
-<meta charset="utf-8">
-<style>
-  :root { --ok:#1a7f37; --bad:#c62828; --wait:#8a8a8a; --bg:#f6f7f9; --card:#fff; --text:#1c1c1e; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:16px; font-family: system-ui, Arial, sans-serif; background:var(--bg); color:var(--text); font-size:17px; }
-  h1 { font-size:22px; margin:0 0 4px; }
-  p.sub { margin:0 0 16px; color:#555; font-size:15px; }
-  .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
-  .row { display:flex; align-items:center; gap:10px; }
-  .dot { width:14px; height:14px; border-radius:50%; background:var(--wait); flex:none; }
-  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
-  .title { font-weight:600; }
-  .detail { margin-top:6px; font-size:14px; color:#444; word-break:break-word; }
-  button { width:100%; margin-top:10px; padding:12px; font-size:17px; border:0; border-radius:10px; background:#2f6fed; color:#fff; }
-  button:disabled { background:#b5c4e8; }
-  .en { direction:ltr; text-align:left; font-size:20px; font-weight:600; padding:8px 0; }
-  .heard { direction:ltr; text-align:left; min-height:24px; font-size:18px; color:#2f6fed; }
-  audio { width:100%; margin-top:8px; }
-  #summary { font-weight:700; font-size:18px; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f5d50">
+  <title>קוראים באנגלית</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&family=Rubik:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <h1>בדיקת מיקרופון</h1>
-  <p class="sub">לחץ על הכפתורים לפי הסדר. בסוף צלם את המסך ושלח לי.</p>
+  <header class="top">
+    <span id="hello"></span>
+    <span id="progress"></span>
+    <span id="timer"></span>
+  </header>
 
-  <div class="card">
-    <div class="row"><div class="dot" id="d1"></div><div class="title">1. גישה למיקרופון</div></div>
-    <div class="detail" id="t1">עוד לא נבדק</div>
-    <button id="b1">בקש גישה למיקרופון</button>
-  </div>
+  <main>
+    <section data-screen="loading">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loading-text" class="center">טוענים…</p>
+    </section>
 
-  <div class="card">
-    <div class="row"><div class="dot" id="d2"></div><div class="title">2. הקלטה והשמעה</div></div>
-    <div class="detail" id="t2">מקליט חמש שניות ומשמיע בחזרה</div>
-    <button id="b2">הקלט חמש שניות</button>
-    <audio id="player" controls hidden></audio>
-  </div>
+    <section data-screen="error" hidden>
+      <h1>אופס</h1>
+      <p id="error-text"></p>
+      <button type="button" id="error-retry" class="primary">לנסות שוב</button>
+    </section>
 
-  <div class="card">
-    <div class="row"><div class="dot" id="d3"></div><div class="title">3. זיהוי דיבור באנגלית</div></div>
-    <div class="detail">לחץ והקרא בקול:</div>
-    <div class="en">The little cat sat on the warm red mat.</div>
-    <div class="heard" id="heard"></div>
-    <div class="detail" id="t3">עוד לא נבדק</div>
-    <button id="b3">התחל לזהות</button>
-  </div>
+    <section data-screen="topic" hidden>
+      <h1 id="topic-title">על מה הסיפור היום?</h1>
+      <p class="muted">כותבים כל נושא שרוצים, באנגלית או בעברית.</p>
+      <input id="topic" type="text" maxlength="80" autocomplete="off" placeholder="למשל: a cat who wants to fly">
+      <div id="suggestions" class="chips"></div>
+      <button type="button" id="make-story" class="primary">צרו לי סיפור ✨</button>
+      <p id="regen-info" class="muted"></p>
+    </section>
 
-  <div class="card">
-    <div class="title">סיכום</div>
-    <div class="detail" id="summary">ממתין לבדיקות</div>
-    <div class="detail" id="env"></div>
-  </div>
+    <section data-screen="preview" hidden>
+      <h1 id="story-title" lang="en" dir="ltr"></h1>
+      <p id="excerpt" class="story excerpt" lang="en" dir="ltr"></p>
+      <p id="preview-info" class="muted"></p>
+      <button type="button" id="start-reading" class="primary">מתחילים לקרוא! 📖</button>
+      <button type="button" id="other-story" class="secondary">רוצה סיפור אחר</button>
+      <p class="muted small">אחרי שמתחילים לקרוא, אי אפשר להחליף סיפור.</p>
+    </section>
 
-<script>
-const results = { mic: null, rec: null, speech: null };
-const $ = id => document.getElementById(id);
+    <section data-screen="prep" hidden>
+      <h1 id="prep-label"></h1>
+      <p>מילים שכדאי להכיר לפני שקוראים. לוחצים כדי לשמוע:</p>
+      <div id="prep-words" class="chips"></div>
+      <button type="button" id="go-read" class="primary">מוכנים? מתחילים לקרוא 🎤</button>
+      <p class="muted small">קוראים בקול ובקצב רגיל, במקום שקט.</p>
+    </section>
 
-function mark(n, ok, text) {
-  $('d' + n).className = 'dot ' + (ok ? 'ok' : 'bad');
-  $('t' + n).textContent = text;
-  updateSummary();
-}
+    <section data-screen="reading" hidden>
+      <p id="hint-info" class="muted small"></p>
+      <article id="page-text" class="story" lang="en" dir="ltr"></article>
+      <div class="bottom-bar">
+        <span id="mic-state" class="mic">מתחברים…</span>
+        <button type="button" id="done-reading" class="primary">סיימתי</button>
+      </div>
+    </section>
 
-function updateSummary() {
-  const names = { mic: 'מיקרופון', rec: 'הקלטה', speech: 'זיהוי דיבור' };
-  const parts = Object.keys(results).map(k =>
-    names[k] + ': ' + (results[k] === null ? 'לא נבדק' : results[k] ? 'עובד' : 'נכשל'));
-  $('summary').textContent = parts.join(' | ');
-}
+    <section data-screen="result" hidden>
+      <div id="result-score" class="score"></div>
+      <p id="result-line" class="center"></p>
+      <article id="result-text" class="story result" lang="en" dir="ltr"></article>
+      <p class="legend small"><span class="k ok">נקרא</span><span class="k mis">הגייה</span><span class="k om">דילוג</span><span class="k hint">רמז</span></p>
+      <div id="practice"></div>
+      <div id="retry-box" hidden>
+        <button type="button" id="retry-btn" class="secondary">לקרוא את העמוד שוב (פעם אחת)</button>
+      </div>
+      <button type="button" id="after-result" class="primary">ממשיכים</button>
+    </section>
 
-$('env').textContent =
-  'הקשר מאובטח: ' + (window.isSecureContext ? 'כן' : 'לא') +
-  ' | בתוך מסגרת: ' + (window.top !== window.self ? 'כן' : 'לא') +
-  ' | זיהוי דיבור קיים: ' + ((window.SpeechRecognition || window.webkitSpeechRecognition) ? 'כן' : 'לא') +
-  ' | ' + navigator.userAgent;
+    <section data-screen="question" hidden>
+      <h1 id="q-label"></h1>
+      <div id="q-box"></div>
+    </section>
 
-// 1. Microphone permission
-$('b1').onclick = async () => {
-  try {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('getUserMedia unavailable');
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach(t => t.stop());
-    results.mic = true;
-    mark(1, true, 'הגישה אושרה');
-  } catch (e) {
-    results.mic = false;
-    mark(1, false, 'נכשל: ' + e.name + ' ' + e.message);
-  }
-};
+    <section data-screen="summary" hidden>
+      <h1 id="summary-title"></h1>
+      <div id="summary-body"></div>
+      <button type="button" id="extra-btn" class="secondary" hidden>עוד סיפור בשביל הכיף</button>
+    </section>
 
-// 2. Record 5 seconds and play back
-$('b2').onclick = async () => {
-  const btn = $('b2');
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const rec = new MediaRecorder(stream);
-    const chunks = [];
-    rec.ondataavailable = e => chunks.push(e.data);
-    rec.onstop = () => {
-      stream.getTracks().forEach(t => t.stop());
-      const blob = new Blob(chunks, { type: rec.mimeType });
-      const p = $('player');
-      p.src = URL.createObjectURL(blob);
-      p.hidden = false;
-      results.rec = blob.size > 0;
-      mark(2, blob.size > 0, blob.size > 0
-        ? 'הוקלט בהצלחה. לחץ נגן כדי לשמוע. פורמט: ' + rec.mimeType
-        : 'ההקלטה ריקה');
-      btn.disabled = false; btn.textContent = 'הקלט שוב';
-    };
-    rec.start();
-    btn.disabled = true; btn.textContent = 'מקליט...';
-    setTimeout(() => rec.stop(), 5000);
-  } catch (e) {
-    results.rec = false;
-    mark(2, false, 'נכשל: ' + e.name + ' ' + e.message);
-  }
-};
+    <section data-screen="expired" hidden>
+      <h1>הזמן נגמר</h1>
+      <p>הסיפור לא הסתיים בזמן, ולכן מתחילים אותו שוב מהעמוד הראשון. זה אותו סיפור.</p>
+      <button type="button" id="expired-btn" class="primary">ממשיכים</button>
+    </section>
+  </main>
 
-// 3. Built-in speech recognition
-$('b3').onclick = () => {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { results.speech = false; mark(3, false, 'הדפדפן לא תומך בזיהוי דיבור'); return; }
-  const r = new SR();
-  r.lang = 'en-US';
-  r.interimResults = true;
-  r.continuous = false;
-  let finalText = '';
-  r.onresult = e => {
-    let t = '';
-    for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
-    $('heard').textContent = t;
-    if (e.results[e.results.length - 1].isFinal) finalText = t;
-  };
-  r.onerror = e => { results.speech = false; mark(3, false, 'נכשל: ' + e.error); };
-  r.onend = () => {
-    $('b3').disabled = false; $('b3').textContent = 'נסה שוב';
-    if (results.speech === false && !finalText) return;
-    if (finalText) { results.speech = true; mark(3, true, 'זוהה בהצלחה'); }
-    else if (results.speech !== false) { results.speech = false; mark(3, false, 'לא זוהה דיבור'); }
-  };
-  results.speech = null;
-  $('heard').textContent = '';
-  $('b3').disabled = true; $('b3').textContent = 'מקשיב...';
-  r.start();
-};
-</script>
+  <footer><span id="version"></span></footer>
+
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>
