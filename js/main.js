@@ -393,4 +393,7 @@ function expiredScreen(sess) {
 /* ---------- go ---------- */
 
 if (isDebug()) document.body.classList.add('debug');
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch((e) => log('app', 'service worker failed', String(e)));
+}
 boot();

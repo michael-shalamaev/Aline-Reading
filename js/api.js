@@ -3,7 +3,18 @@
 import { SCRIPT_URL, API_TIMEOUT_MS, API_TIMEOUT_STORY_MS } from './config.js';
 import { log } from './debug.js';
 
-const code = new URLSearchParams(location.search).get('k') || '';
+// The child's code comes from the personal link once, and is remembered, so the
+// installed app (which always starts without it) still knows who is reading.
+const CODE_KEY = 'reading_code';
+const code = (() => {
+  const fromLink = new URLSearchParams(location.search).get('k');
+  try {
+    if (fromLink) localStorage.setItem(CODE_KEY, fromLink);
+    return fromLink || localStorage.getItem(CODE_KEY) || '';
+  } catch {
+    return fromLink || '';
+  }
+})();
 
 export class ApiError extends Error {
   constructor(code, message) {
