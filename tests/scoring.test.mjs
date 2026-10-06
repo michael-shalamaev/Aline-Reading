@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { tokenize, normWord, wordsHtml } from '../js/text.js';
-import { alignPage, summarize, followPosition } from '../js/scoring.js';
+import { alignPage, summarize, followPosition, pageBelow } from '../js/scoring.js';
 
 const heard = (s, acc = 95) => s.split(' ').map((word) => ({ word, acc, err: 'None' }));
 
@@ -98,4 +98,28 @@ test('live position follows reading and skips over a missed word', () => {
 test('live position jumps after a skipped line', () => {
   const ref = tokenize('One two three four five six seven eight nine ten eleven twelve.');
   assert.equal(followPosition(ref, ['one', 'two', 'nine', 'ten', 'eleven']), 11);
+});
+
+test('a word said again right away counts by its better try', () => {
+  const ref = tokenize('The cats sleep.');
+  const h = [{ word: 'the', acc: 95 }, { word: 'cats', acc: 30 }, { word: 'cats', acc: 90 }, { word: 'sleep', acc: 95 }];
+  const r = alignPage(ref, h);
+  assert.deepEqual(r.statuses, ['ok', 'ok', 'ok']);
+  assert.equal(r.insertions, 0);
+});
+
+test('a word the text itself repeats is not merged', () => {
+  const ref = tokenize('Oliver. Oliver has fur.');
+  const h = [{ word: 'oliver', acc: 95 }, { word: 'oliver', acc: 20 }, { word: 'has', acc: 95 }, { word: 'fur', acc: 95 }];
+  const r = alignPage(ref, h);
+  assert.deepEqual(r.statuses, ['ok', 'mis', 'ok', 'ok']);
+});
+
+test('page verdict on the phone matches the server rule', () => {
+  const child = { passByErrors: false, passPercent: 85, maxErrors: 40 };
+  assert.equal(pageBelow({ acc: 84.9, errors: 12, n: 80 }, child, 400), true);
+  assert.equal(pageBelow({ acc: 85, errors: 12, n: 80 }, child, 400), false);
+  const byErr = { passByErrors: true, maxErrors: 40 };
+  assert.equal(pageBelow({ acc: 0, errors: 8, n: 80 }, byErr, 400), false);
+  assert.equal(pageBelow({ acc: 0, errors: 9, n: 80 }, byErr, 400), true);
 });

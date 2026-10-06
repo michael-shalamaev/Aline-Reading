@@ -4,6 +4,8 @@
  * columns C onward = one child each.
  */
 
+var SETTINGS_CACHE_SEC = 600;
+
 var SHEETS = {
   settings: 'הגדרות',
   log: 'יומן',
@@ -24,12 +26,13 @@ var SETTING_DEFS = [
   { key: 'level', label: 'רמה: מתחילים, מתחילים מתקדמים, בינוני', def: 'מתחילים מתקדמים', type: 'string' },
   { key: 'passMode', label: 'סוג סף: אחוזים או שגיאות', def: 'אחוזים', type: 'string' },
   { key: 'passPercent', label: 'סף מעבר באחוזי דיוק', def: 85, type: 'int' },
-  { key: 'maxErrors', label: 'מספר שגיאות מקסימלי, כשסוג הסף הוא שגיאות', def: 40, type: 'int' },
+  { key: 'maxErrors', label: 'מספר שגיאות מקסימלי, כשסוג הסף הוא שגיאות', def: 60, type: 'int' },
   { key: 'quizBlocks', label: 'שאלות ההבנה חוסמות מעבר: כן או לא', def: 'לא', type: 'bool' },
   { key: 'quizMinPercent', label: 'אחוז תשובות נכונות מינימלי, כשהשאלות חוסמות', def: 70, type: 'int' },
   { key: 'hintsPerPage', label: 'רמזים לעמוד במהלך הקריאה. 0 מכבה. כל רמז נספר כשגיאה', def: 3, type: 'int' },
   { key: 'windowMinutes', label: 'חלון זמן לסיום הסיפור, בדקות', def: 60, type: 'int' },
   { key: 'regenPerDay', label: 'כמה פעמים אפשר להחליף סיפור לפני תחילת הקריאה', def: 3, type: 'int' },
+  { key: 'pronThreshold', label: 'רגישות הגייה: ציון מיקרוסופט (0-100) שמתחתיו מילה נספרת כשגיאת הגייה. נמוך = סלחני', def: 60, type: 'int' },
   { key: 'maxWpm', label: 'קצב חשוד: מילים לדקה', def: 160, type: 'int' },
   { key: 'accent', label: 'מבטא: אמריקאי או בריטי', def: 'אמריקאי', type: 'string' },
   { key: 'extraAllowed', label: 'סיפור נוסף אחרי מעבר: כן או לא', def: 'כן', type: 'bool' },
@@ -38,14 +41,17 @@ var SETTING_DEFS = [
   { key: 'emails', label: 'כתובות למייל הסיכום, מופרדות בפסיק. ריק = בעל הסקריפט', def: '', type: 'string' }
 ];
 
+/** The spreadsheet, opened once per request (opening it is one of the slowest calls). */
 function ss() {
-  var id = prop('SHEET_ID', true);
-  return SpreadsheetApp.openById(id);
+  if (!REQ.book) REQ.book = SpreadsheetApp.openById(prop('SHEET_ID', true));
+  return REQ.book;
 }
 
 function sheet(name) {
+  if (REQ.sheets[name]) return REQ.sheets[name];
   var sh = ss().getSheetByName(name);
   if (!sh) fail('sheet_missing', 'Missing tab: ' + name + '. Run setup().');
+  REQ.sheets[name] = sh;
   return sh;
 }
 
@@ -64,7 +70,7 @@ function parseSetting(def, raw) {
   }
 }
 
-/** All children, keyed by column. Cached for 60 seconds. */
+/** All children, keyed by column. Cached for 10 minutes; setup() clears the cache. */
 function readChildren() {
   var cache = CacheService.getScriptCache();
   var hit = cache.get('children');
@@ -84,7 +90,7 @@ function readChildren() {
     });
     if (child.code) children.push(normalizeChild(child));
   }
-  cache.put('children', JSON.stringify(children), 60);
+  cache.put('children', JSON.stringify(children), SETTINGS_CACHE_SEC);
   return children;
 }
 
@@ -115,7 +121,8 @@ function publicSettings(c) {
     suggestions: c.suggestionList,
     passByErrors: c.passByErrors,
     passPercent: c.passPercent,
-    maxErrors: c.maxErrors
+    maxErrors: c.maxErrors,
+    pronThreshold: Math.max(0, Math.min(100, c.pronThreshold))
   };
 }
 

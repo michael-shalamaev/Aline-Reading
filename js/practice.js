@@ -4,6 +4,7 @@ import { speak } from './tts.js';
 import { checkWord } from './speech.js';
 import { call } from './api.js';
 import { log } from './debug.js';
+import { reportError } from './report.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -71,7 +72,7 @@ export function renderPractice(el, errWords, lang) {
     flush() {
       if (!results.size) return;
       const list = Array.from(results, ([word, ok]) => ({ word, ok }));
-      call('practice', { results: list }).catch((e) => log('practice', 'save failed', String(e)));
+      call('practice', { results: list }).catch((e) => { log('practice', 'save failed', String(e)); reportError('practice', e, 'result'); });
     }
   };
 }

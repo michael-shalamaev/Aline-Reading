@@ -132,27 +132,33 @@ function generateStory(child, topic, withQuestions) {
 
 var GEMINI_TRY_NEXT = { 404: 1, 429: 1, 500: 1, 503: 1 };
 
+/**
+ * One request. A story needs no deep reasoning, so ask for minimal "thinking":
+ * it is most of the waiting time on newer models.
+ */
+function geminiRequest(model, prompt, lowThinking) {
+  var config = { responseMimeType: 'application/json', responseSchema: storySchema(), temperature: 1 };
+  if (lowThinking) config.thinkingConfig = { thinkingLevel: 'low' };
+  return UrlFetchApp.fetch(GEMINI_BASE + '/models/' + model + ':generateContent', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-goog-api-key': prop('GEMINI_API_KEY', true) },
+    muteHttpExceptions: true,
+    payload: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: config })
+  });
+}
+
 /** Sends the prompt to the first model that answers; busy or missing models are skipped. */
 function callGemini(prompt) {
   var models = geminiModels();
   var notes = [];
   for (var i = 0; i < models.length; i++) {
-    var res = UrlFetchApp.fetch(GEMINI_BASE + '/models/' + models[i] + ':generateContent', {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': prop('GEMINI_API_KEY', true) },
-      muteHttpExceptions: true,
-      payload: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: storySchema(),
-          temperature: 1
-        }
-      })
-    });
+    var started = Date.now();
+    var res = geminiRequest(models[i], prompt, true);
+    if (res.getResponseCode() === 400) res = geminiRequest(models[i], prompt, false); // model rejects the thinking field
     var code = res.getResponseCode();
     var body = res.getContentText();
+    console.log('gemini', models[i], code, (Date.now() - started) + 'ms');
     if (code === 200) {
       var data = JSON.parse(body);
       var text = data.candidates && data.candidates[0] && data.candidates[0].content &&
@@ -160,6 +166,7 @@ function callGemini(prompt) {
       if (!text) fail('gemini_error', models[i] + ' gave an empty answer: ' + body.slice(0, 300));
       var story = JSON.parse(text);
       story._model = models[i];
+      story._ms = Date.now() - started;
       return story;
     }
     notes.push(models[i] + ' ' + code);
@@ -200,6 +207,7 @@ function validateStory(s, child) {
   if (!s.finalQuestions || s.finalQuestions.length < 3) fail('bad_story', 'Missing final questions');
   return {
     model: s._model || '',
+    genMs: s._ms || 0,
     title: String(s.title || 'A Story'),
     topicUsed: String(s.topicUsed || ''),
     topicAdjusted: !!s.topicAdjusted,

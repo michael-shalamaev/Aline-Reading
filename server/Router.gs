@@ -12,7 +12,8 @@ var ACTIONS = {
   submitPage: actSubmitPage,
   answer: actAnswer,
   practice: actPractice,
-  finish: actFinish
+  finish: actFinish,
+  clientError: actClientError
 };
 
 function doGet(e) {
@@ -25,27 +26,37 @@ function doPost(e) {
   return handle(body);
 }
 
+/**
+ * Every answer carries ms (time spent in this script) and lockMs (of it, waiting for
+ * another request to finish), so the page's log can tell slow server from slow network.
+ */
 function handle(req) {
+  REQ = newReq();
   var action = req.action || 'ping';
   var childId = '';
+  var out;
   try {
     var fn = ACTIONS[action];
     if (!fn) fail('unknown_action', action);
     var child = action === 'ping' ? null : authChild(req.k);
     childId = child ? child.id : '';
-    return jsonOut({ ok: true, v: SERVER_VERSION, t: Date.now(), data: fn(child, req) });
+    var data = fn(child, req);
+    out = { ok: true, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs, data: data };
   } catch (e) {
     var known = e instanceof AppError;
-    if (!known || e.code === 'gemini_error' || e.code === 'speech_token_error' || e.code === 'bad_story') {
-      logError(childId, action, e);
-    }
-    return jsonOut({
-      ok: false,
-      v: SERVER_VERSION,
+    if (!known || LOGGED_ERRORS.indexOf(e.code) >= 0) logError(childId, action, e);
+    out = {
+      ok: false, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs,
       error: { code: known ? e.code : 'server_error', message: e.message || String(e) }
-    });
+    };
   }
+  // Shows in the Apps Script editor under Executions.
+  console.log(action + ' ' + (out.ok ? 'ok' : out.error.code) + ' ' + out.ms + 'ms (lock wait ' + out.lockMs + 'ms)');
+  return jsonOut(out);
 }
+
+/** Expected refusals (page_not_allowed, too_early...) are not errors; these are. */
+var LOGGED_ERRORS = ['gemini_error', 'speech_token_error', 'bad_story', 'busy', 'sheet_missing', 'config_missing'];
 
 /* ---------- actions ---------- */
 
@@ -132,7 +143,7 @@ function allowedToRead(child, sess, i) {
 }
 
 function actStartPage(child, req) {
-  return withLock(function () {
+  var out = withLock(function () {
     var sess = loadActive(child, req);
     if (checkWindow(sess, child)) {
       saveSession(sess);
@@ -145,39 +156,63 @@ function actStartPage(child, req) {
     saveSession(sess);
     return { expired: false, startedAt: sess.state.startedAt };
   });
+  // The speech token rides along, saving the phone a second round trip.
+  // Fetched after the lock is released: Microsoft can be slow, and nobody should wait for it.
+  if (!out.expired) {
+    out.speech = null;
+    try { out.speech = issueSpeechToken(); } catch (e) { logError(child.id, 'startPage token', e); }
+  }
+  return out;
 }
 
 function actSpeechToken() {
   return issueSpeechToken();
 }
 
+function submitAnswer(child, sess, i, a) {
+  var p = sess.state.pages[i];
+  var below = pageBelowBar(child, a, sess.story.wordCount);
+  return {
+    expired: false,
+    attempt: summaryOfAttempt(a),
+    errWords: a.errWords,
+    below: below,
+    canRetry: below && p.attempts.length < MAX_ATTEMPTS,
+    best: summaryOfAttempt(p.attempts[p.best])
+  };
+}
+
 function actSubmitPage(child, req) {
-  return withLock(function () {
+  var logRow = null;
+  var out = withLock(function () {
     var sess = loadActive(child, req);
+    var i = pageIndex(sess, req);
+    var p = sess.state.pages[i];
+    // The phone may send the same attempt twice (it retries after a timeout): answer, don't count again.
+    var id = String(req.attemptId || '');
+    if (id) {
+      for (var k = 0; k < p.attempts.length; k++) {
+        if (p.attempts[k].id === id) return submitAnswer(child, sess, i, p.attempts[k]);
+      }
+    }
     if (checkWindow(sess, child)) {
       saveSession(sess);
       return { expired: true, session: publicSession(sess, child) };
     }
-    var i = pageIndex(sess, req);
     var started = sess.state.pageStartedAt[i];
     if (!started) fail('page_not_started', 'Page was not started');
-    var p = sess.state.pages[i];
     var a = scoreAttempt(sess.story.pages[i].text, req, (Date.now() - started) / 1000);
+    a.id = id;
     p.attempts.push(a);
     p.best = bestIndex(p.attempts);
     delete sess.state.pageStartedAt[i];
-    var below = pageBelowBar(child, a, sess.story.wordCount);
-    logPageAttempt(child, sess, i, p.attempts.length, a, below);
     saveSession(sess);
-    return {
-      expired: false,
-      attempt: summaryOfAttempt(a),
-      errWords: a.errWords,
-      below: below,
-      canRetry: below && p.attempts.length < MAX_ATTEMPTS,
-      best: summaryOfAttempt(p.attempts[p.best])
-    };
+    logRow = function () { logPageAttempt(child, sess, i, p.attempts.length, a, pageBelowBar(child, a, sess.story.wordCount)); };
+    return submitAnswer(child, sess, i, a);
   });
+  // The attempt is saved; the parent's log row is written after the lock is released.
+  if (logRow) { try { logRow(); } catch (e) { logError(child.id, 'logPageAttempt', e); } }
+  return out;
 }
 
 function actAnswer(child, req) {
@@ -216,7 +251,8 @@ function actPractice(child, req) {
 }
 
 function actFinish(child, req) {
-  return withLock(function () {
+  var mail = null;
+  var out = withLock(function () {
     var sess = loadActive(child, req);
     var s = sess.state;
     if (s.pages.some(function (p) { return p.best < 0; })) fail('too_early', 'Not all pages were read');
@@ -232,7 +268,20 @@ function actFinish(child, req) {
     saveSession(sess);
     logSession(child, sess, r);
     try { updateHardWords(child, sess); } catch (e) { logError(child.id, 'updateHardWords', e); }
-    try { sendSummaryMail(child, sess, r); } catch (e) { logError(child.id, 'sendSummaryMail', e); }
+    mail = function () { sendSummaryMail(child, sess, r); };
     return { result: r, extraAllowed: !s.extra && r.passed && child.extraAllowed };
   });
+  if (mail) { try { mail(); } catch (e) { logError(child.id, 'sendSummaryMail', e); } }
+  return out;
+}
+
+/** Something went wrong on the phone: one row in the errors tab, with the phone's last log lines. */
+function actClientError(child, req) {
+  var cut = function (x, n) { return String(x || '').slice(0, n); };
+  sheet(SHEETS.errors).appendRow([
+    new Date(), child.id, 'טלפון: ' + cut(req.where, 80),
+    cut(req.code, 40) + ': ' + cut(req.message, 500),
+    cut(req.details, 4000)
+  ]);
+  return { saved: true };
 }

@@ -200,3 +200,14 @@ section[data-screen=reading] ~ footer { display: none; }
 #debug-panel.min pre { display: none; }
 
 #q-box .next { width: 100%; margin-top: 4px; }
+
+/* Until the microphone is really listening, the page is dimmed so nobody starts too early. */
+#page-text.waiting { opacity: .35; filter: blur(1px); pointer-events: none; }
+.ready-banner {
+  margin: 0; padding: 12px 16px; border-radius: var(--radius); text-align: center;
+  background: var(--good-soft); color: var(--good); font-weight: 700; font-size: 20px;
+}
+
+.save-state { margin: 0; min-height: 1.4em; text-align: center; font-size: 15px; color: var(--muted); }
+.save-state.failed { color: var(--bad); }
+.linkish { border: 0; background: none; color: var(--brand); text-decoration: underline; font-weight: 700; padding: 0; }

@@ -32,7 +32,8 @@ with a 10-minute token that the script issues.
 | `practice.js` | Hard words before a page, practice after it |
 | `quiz.js` | Comprehension questions |
 | `tts.js` | Saying a word out loud |
-| `debug.js` | Diagnostics panel (`&debug=1`) |
+| `debug.js` | Diagnostics log (always kept in memory) and panel (`&debug=1`) |
+| `report.js` | Sends errors seen on the phone, with the last log lines, to the errors tab |
 
 ### Server (`server/`)
 
@@ -53,6 +54,11 @@ with a 10-minute token that the script issues.
 ## Tests
 
 ```
-npm test                 # alignment, tokenizer parity, and the full server flow on an in-memory Apps Script mock
-node tests/e2e/run.mjs   # browser walk-through of a whole day (Playwright), screenshots in tests/e2e/shots/
+npm test           # unit + server: alignment, tokenizer parity, full server flows, request cost budgets
+npm run test:e2e   # system: real page in Chromium against the server code, with injected faults
+                   # (Google HTML error page, lost answers, timeouts, dropped speech), then a whole day
+npm run perf       # estimated Google round-trip cost per server action
 ```
+
+Every server answer carries `ms` (time in the script) and `lockMs` (waiting for another request),
+shown in the debug log next to the phone's own round-trip time.
