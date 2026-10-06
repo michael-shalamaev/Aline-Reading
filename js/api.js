@@ -30,7 +30,13 @@ export class ApiError extends Error {
   }
 }
 
+// Server clock minus phone clock. Each answer carries the server's time, but Google can hold
+// a request for many seconds before or after the script runs, so a single answer can be off
+// by half its round trip. Only the quickest answer seen (smallest possible error) is used;
+// after 10 minutes a new one may replace it.
 let clockOffset = 0;
+let bestRtt = Infinity;
+let bestAt = 0;
 
 /** Server time in ms (phone clocks can be off; the time window is measured on the server). */
 export function serverNow() {
@@ -46,12 +52,24 @@ export function hasCode() {
  * pre-flight request, which Apps Script does not answer.
  */
 // Safe to send twice: the server recognises a repeat (attemptId, first answer wins) or only reads.
-const RETRY_SAFE = new Set(['init', 'speechToken', 'startPage', 'submitPage', 'answer']);
+const RETRY_SAFE = new Set(['init', 'speechToken', 'startPage', 'submitPage', 'answer', 'finish']);
 // Worth one more try: no answer, Google's own error page instead of ours, or the lock was busy.
 const RETRY_ON = new Set(['timeout', 'network', 'server_html', 'busy']);
 const RETRY_DELAY_MS = 1500;
 
-export async function call(action, payload = {}) {
+// Calls that change the day's progress go out one at a time, in the order they were made
+// (a reading is saved before the next page starts, even when saving runs in the background).
+const IN_ORDER = new Set(['startPage', 'submitPage', 'answer', 'practice', 'finish']);
+let queue = Promise.resolve();
+
+export function call(action, payload = {}) {
+  if (!IN_ORDER.has(action)) return callWithRetry(action, payload);
+  const p = queue.then(() => callWithRetry(action, payload));
+  queue = p.catch(() => {});
+  return p;
+}
+
+async function callWithRetry(action, payload) {
   try {
     return await callOnce(action, payload);
   } catch (e) {
@@ -114,7 +132,12 @@ export async function callOnce(action, payload = {}) {
   }
 
   const ms = took();
-  if (json.t) clockOffset = json.t - Date.now() + ms / 2;
+  if (json.t && (ms < bestRtt || Date.now() - bestAt > 10 * 60000)) {
+    clockOffset = Math.round(json.t - Date.now() + ms / 2);
+    bestRtt = ms;
+    bestAt = Date.now();
+    log('api', `clock: server minus phone ${clockOffset}ms (±${Math.round(ms / 2)}ms)`);
+  }
   const where = json.ms !== undefined ? `, script ${json.ms}ms, lock wait ${json.lockMs}ms` : '';
   if (!warnedVersion && json.v && json.v !== VERSION) {
     warnedVersion = true;

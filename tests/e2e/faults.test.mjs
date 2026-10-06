@@ -8,6 +8,14 @@ import { tokenize } from '../../js/text.js';
 const attemptsOf = (app, i) => app.session().pages[i].attempts;
 const savedOk = (app) => app.page.waitForFunction(() =>
   !document.querySelector('#after-result').disabled && document.querySelector('#save-state').textContent === '', null, { timeout: 15000 });
+/** Waits (up to 15 s) until the server's state satisfies check. */
+async function until(check, what) {
+  for (let t = 0; t < 150; t++) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.fail('timed out waiting for: ' + what);
+}
 const phoneRows = (app) => app.errorRows().filter((r) => String(r[2]).startsWith('טלפון'));
 
 test('the real incident: reading saved, but Google answered with its HTML page — retried, counted once, reported', async () => {
@@ -15,9 +23,9 @@ test('the real incident: reading saved, but Google answered with its HTML page �
   try {
     await toFirstPage(app);
     await readPage(app);
-    await savedOk(app);
-    assert.equal(attemptsOf(app, 0), 1, 'the retry did not count the page twice');
+    await until(() => attemptsOf(app, 0) === 1, 'saved');
     await new Promise((r) => setTimeout(r, 500));
+    assert.equal(attemptsOf(app, 0), 1, 'the retry did not count the page twice');
     const row = phoneRows(app).find((r) => r[2] === 'טלפון: submitPage (retried)');
     assert.ok(row, 'reported to the errors tab');
     assert.match(row[3], /^server_html/);
@@ -27,17 +35,56 @@ test('the real incident: reading saved, but Google answered with its HTML page �
   } finally { await app.close(); }
 });
 
-test('both tries of saving fail: the result stays, "try again" saves it, still counted once', async () => {
-  const app = await startApp({ fault: (r, n) => (r.action === 'submitPage' && n <= 2 ? { html: 'after' } : null) });
+test('saving keeps trying in the background while she goes on; counted once', async () => {
+  const app = await startApp({ fault: (r, n) => (r.action === 'submitPage' && n <= 3 ? { html: 'after' } : null) });
   try {
     await toFirstPage(app);
     await readPage(app);
-    await app.page.waitForSelector('#save-state.failed .linkish');
-    assert.equal(await app.page.isDisabled('#after-result'), true, 'cannot go on before the server confirmed');
-    await app.shot('f1-save-failed');
-    await app.page.click('#save-state .linkish');
-    await savedOk(app);
+    assert.equal(await app.page.isDisabled('#after-result'), false, 'no waiting for the server');
+    await app.page.click('#after-result');
+    await app.screen('question');
+    await until(() => app.counts.submitPage >= 4, 'tried until the answer came through');
     assert.equal(attemptsOf(app, 0), 1);
+  } finally { await app.close(); }
+});
+
+test('going on before the save is done: the next page waits its turn, nothing out of step', async () => {
+  const app = await startApp({ timeoutMs: 15000, fault: (r) => (r.action === 'submitPage' ? { delayMs: 2500 } : null) });
+  try {
+    await toFirstPage(app);
+    await readPage(app);
+    const t0 = Date.now();
+    await app.page.click('#after-result');
+    await app.screen('question');
+    await app.page.click('.option[data-i="1"]');
+    await app.page.waitForSelector('.next:not([hidden])');
+    assert.ok(Date.now() - t0 < 1500, 'no waiting between result, question and answer');
+    await app.page.click('.next');
+    await app.screen('prep');
+    await readPage(app);
+    await until(() => attemptsOf(app, 1) === 1, 'page 2 saved');
+    assert.equal(attemptsOf(app, 0), 1);
+    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true });
+    assert.equal(phoneRows(app).length, 0, 'no errors at all');
+  } finally { await app.close(); }
+});
+
+test('a reading that can never be saved: she is brought back to that page, not stuck', async () => {
+  const app = await startApp({ fault: (r) => (r.action === 'submitPage' && r.page === 0 ? { html: 'before' } : null) });
+  try {
+    await toFirstPage(app);
+    await readPage(app);
+    await app.page.click('#after-result');
+    await app.screen('question');
+    await app.page.click('.option[data-i="1"]');
+    await app.page.waitForSelector('.next:not([hidden])');
+    await app.page.click('.next');
+    await app.screen('prep');
+    await app.page.click('#go-read');
+    // page 2 cannot start while page 1 is not saved → back to where the server is: page 1
+    await app.page.waitForFunction(() => /עמוד 1 /.test(document.querySelector('#prep-label')?.textContent || '') &&
+      !document.querySelector('[data-screen="prep"]').hidden, null, { timeout: 40000 });
+    assert.notEqual(await app.visible(), 'error');
   } finally { await app.close(); }
 });
 
@@ -54,7 +101,7 @@ test('starting a page fails twice: error screen, "try again" asks the server and
     await app.screen('prep');
     assert.equal(app.counts.init, inits + 1, 'went back to the server for the state');
     await readPage(app);
-    await savedOk(app);
+    await until(() => attemptsOf(app, 0) === 1, 'saved');
     const where = phoneRows(app).map((r) => r[2]);
     assert.ok(where.includes('טלפון: startPage'), 'the error screen itself was reported: ' + where);
   } finally { await app.close(); }
@@ -85,18 +132,18 @@ test('slow server: first try times out, second works; the page counts once', asy
   try {
     await toFirstPage(app);
     await readPage(app);
-    await savedOk(app);
+    await until(() => attemptsOf(app, 0) === 1, 'saved');
     assert.equal(app.counts.startPage, 2);
     assert.equal(attemptsOf(app, 0), 1);
   } finally { await app.close(); }
 });
 
-test('answer lost twice, the app is closed and opened again: continues at the question, nothing lost', async () => {
-  const app = await startApp({ fault: (r, n) => (r.action === 'submitPage' && n <= 2 ? { drop: 'after' } : null) });
+test('answer lost every time, the app is closed and opened again: continues at the question, nothing lost', async () => {
+  const app = await startApp({ fault: (r) => (r.action === 'submitPage' ? { drop: 'after' } : null) });
   try {
     await toFirstPage(app);
     await readPage(app);
-    await app.page.waitForSelector('#save-state.failed');
+    await until(() => attemptsOf(app, 0) === 1, 'the server has it, though the phone never heard');
     await app.open();
     await app.screen('question');
     assert.equal(attemptsOf(app, 0), 1);
@@ -115,8 +162,7 @@ test('microphone: listens at once, without waiting for a slow server; the readin
     const waited = Date.now() - t0;
     assert.ok(waited < 1500, `mic ready after ${waited}ms with a 5000ms server`);
     await app.screen('result');
-    await savedOk(app);
-    assert.equal(attemptsOf(app, 0), 1);
+    await until(() => attemptsOf(app, 0) === 1, 'saved after the slow start');
     assert.ok(app.session().pages[0].best.durSec >= 1, 'duration measured on the phone');
   } finally { await app.close(); }
 });
@@ -180,7 +226,6 @@ test('questions: right/wrong shows at once even when the server takes 6 seconds;
   try {
     await toFirstPage(app);
     await readPage(app);
-    await savedOk(app);
     const ms = await answer(app, 1);
     assert.ok(ms < 1000, `feedback after ${ms}ms`);
     assert.match(await app.page.textContent('.feedback'), /נכון/);
@@ -199,7 +244,6 @@ test('an answer that never reaches the server is asked again before the summary,
     for (let i = 0; i < 5; i++) {
       await app.screen('prep');
       await readPage(app);
-      await savedOk(app);
       await answer(app, 1);
       await app.page.click('.next');
     }
@@ -221,7 +265,7 @@ test('reading "Natasha" instead of "Mia": marked as another word, one error, kin
   try {
     await toFirstPage(app);
     await readPage(app, { skip: [3], mis: [], replace: { 0: 'Natasha' } });
-    await savedOk(app);
+    await until(() => attemptsOf(app, 0) === 1, 'saved');
     const cls = await app.page.$eval('#result-text .w[data-i="0"]', (e) => e.className);
     assert.match(cls, /st-sub/);
     assert.match(await app.page.$eval('#result-text .w[data-i="3"]', (e) => e.className), /st-om/);
@@ -230,5 +274,78 @@ test('reading "Natasha" instead of "Mia": marked as another word, one error, kin
     const a = app.session().pages[0].best;
     assert.equal(a.sub, 1);
     assert.equal(a.errors, 2);
+  } finally { await app.close(); }
+});
+
+test('summing up: Google returns its error page though the story was finished — the summary still shows', async () => {
+  const app = await startApp({ fault: (r, n) => (r.action === 'finish' && n === 1 ? { html: 'after' } : null) });
+  try {
+    await toFirstPage(app);
+    // Everything but the last question is done (as if read on this phone earlier).
+    const k = app.code;
+    const st = app.session().story;
+    st.pages.forEach((pg, i) => {
+      app.server.api({ action: 'startPage', page: i, k });
+      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    });
+    [0, 1].forEach((f) => app.server.api({ action: 'answer', kind: 'final', index: f, choice: 1, k }));
+    await app.open();
+    await app.screen('question');
+    await app.page.click('.option[data-i="1"]');
+    await app.page.waitForSelector('.next:not([hidden])');
+    await app.page.click('.next');
+    await app.screen('summary', 20000);
+    assert.equal(app.server.mails.length, 1, 'one mail, not two');
+  } finally { await app.close(); }
+});
+
+test('the countdown clock: a slow answer from Google does not move it', async () => {
+  const skew = 5 * 60000; // the phone's clock is 5 minutes behind the server's
+  const app = await startApp({
+    timeoutMs: 15000,
+    realClockSkewMs: skew,
+    fault: (r) => (r.action === 'startPage' ? { delayAfterMs: 4000 } : null)
+  });
+  try {
+    await toFirstPage(app);
+    const offset = () => app.page.evaluate(async () => (await import('/js/api.js')).serverNow() - Date.now());
+    const before = await offset();
+    assert.ok(Math.abs(before - skew) < 1000, `offset ${before}`);
+    // A slow reading; the page's start answer comes back 4 seconds after the server's time.
+    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 150 }; });
+    await app.page.click('#go-read');
+    await new Promise((r) => setTimeout(r, 5000));
+    const after = await offset();
+    assert.ok(Math.abs(after - skew) < 1000, `offset moved to ${after} (error ${after - skew}ms)`);
+  } finally { await app.close(); }
+});
+
+test('final answers that failed to save are sent again before summing up; the questions are not asked twice', async () => {
+  let finalTries = 0;
+  const app = await startApp({
+    fault: (r) => (r.action === 'answer' && r.kind === 'final' && ++finalTries <= 18 ? { html: 'before' } : null)
+  });
+  try {
+    await toFirstPage(app);
+    const k = app.code;
+    const st = app.session().story;
+    st.pages.forEach((pg, i) => {
+      app.server.api({ action: 'startPage', page: i, k });
+      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    });
+    await app.open();
+    const asked = [];
+    for (let f = 0; f < 3; f++) {
+      await app.screen('question');
+      asked.push(await app.page.textContent('#q-label'));
+      await app.page.click('.option[data-i="1"]');
+      await app.page.waitForSelector('.next:not([hidden])');
+      await app.page.click('.next');
+    }
+    await app.screen('summary', 40000);
+    assert.equal(asked.length, 3);
+    assert.ok(app.session().finalAnswers.every((a) => a && a.choice === 1));
   } finally { await app.close(); }
 });
