@@ -33,8 +33,11 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
   const calls = [];
   const counts = {};
 
-  const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM || undefined });
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, locale: 'he-IL' });
+  const browser = await chromium.launch({
+    executablePath: process.env.PW_CHROMIUM || undefined,
+    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--unsafely-treat-insecure-origin-as-secure=http://app.test']
+  });
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, locale: 'he-IL', serviceWorkers: 'block' });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => {
@@ -86,7 +89,7 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
     shot: (name) => page.screenshot({ path: new URL(name + '.png', shots).pathname, fullPage: true }),
     screen: (name, timeout = 15000) => page.waitForSelector(`[data-screen="${name}"]:not([hidden])`, { timeout }),
     visible: () => page.evaluate(() => document.querySelector('[data-screen]:not([hidden])')?.dataset.screen),
-    open: (extra = '') => page.goto(`http://app.test/?k=${code}${extra}`),
+    open: (extra = '') => page.goto(`https://app.test/?k=${code}${extra}`),
     errorRows: () => server.book().getSheetByName('שגיאות').rows().slice(1),
     session: () => server.api({ action: 'init', k: code }).data.session,
     close: () => browser.close()

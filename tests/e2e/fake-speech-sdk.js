@@ -50,7 +50,10 @@
 
   window.SpeechSDK = {
     SpeechConfig: { fromAuthorizationToken: () => ({ setProperty() {}, speechRecognitionLanguage: '' }) },
-    AudioConfig: { fromDefaultMicrophoneInput: () => ({}) },
+    AudioConfig: {
+      fromDefaultMicrophoneInput: () => ({ close() {} }),
+      fromStreamInput: (stream) => { window.__micStream = stream; return { close() {} }; }
+    },
     PropertyId: { Speech_SegmentationSilenceTimeoutMs: 1, SpeechServiceResponse_JsonResult: 2 },
     ResultReason: { RecognizedSpeech: RECOGNIZED },
     CancellationReason: { Error: 1 },

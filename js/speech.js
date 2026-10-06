@@ -83,6 +83,32 @@ function paConfig(SDK, referenceText) {
   }));
 }
 
+/**
+ * The microphone, opened by us rather than by Microsoft's component, without echo
+ * cancellation: with it, Android treats the page like a phone call and plays every sound
+ * (the hint words) quietly through the earpiece instead of the loudspeaker.
+ * Returns {audio, release()}; falls back to Microsoft's default microphone.
+ */
+async function openMic(SDK) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true }
+    });
+    const audio = SDK.AudioConfig.fromStreamInput(stream);
+    return {
+      audio,
+      release() {
+        stream.getTracks().forEach((t) => t.stop());
+        try { audio.close(); } catch { /* closed */ }
+      }
+    };
+  } catch (e) {
+    log('speech', 'own microphone not available, using the default', String(e));
+    const audio = SDK.AudioConfig.fromDefaultMicrophoneInput();
+    return { audio, release() { try { audio.close(); } catch { /* closed */ } } };
+  }
+}
+
 /** Microsoft's JSON result → [{word, acc, err}] */
 function wordsOf(SDK, result) {
   try {
@@ -105,8 +131,8 @@ function wordsOf(SDK, result) {
 export async function startReading({ referenceText, lang, onProgress, onProblem }) {
   const SDK = await loadSdk();
   const t = await getToken();
-  const audio = SDK.AudioConfig.fromDefaultMicrophoneInput();
-  const rec = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), audio);
+  const mic = await openMic(SDK);
+  const rec = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), mic.audio);
   paConfig(SDK, referenceText).applyTo(rec);
 
   const finals = [];
@@ -148,6 +174,7 @@ export async function startReading({ referenceText, lang, onProgress, onProblem 
 
   await new Promise((resolve, reject) => rec.startContinuousRecognitionAsync(resolve, (err) => {
     clearInterval(refresher);
+    mic.release();
     reject(new Error(String(err)));
   }));
 
@@ -156,7 +183,8 @@ export async function startReading({ referenceText, lang, onProgress, onProblem 
     stop() {
       if (!stopped) {
         stopped = new Promise((resolve) => {
-          const done = () => { clearInterval(refresher); try { rec.close(); } catch { /* closed */ } resolve(finals); };
+          // The microphone is released as soon as reading stops, so sounds play normally again.
+          const done = () => { clearInterval(refresher); try { rec.close(); } catch { /* closed */ } mic.release(); resolve(finals); };
           rec.stopContinuousRecognitionAsync(done, (err) => { log('speech', 'stop error', String(err)); done(); });
         });
       }
@@ -169,7 +197,8 @@ export async function startReading({ referenceText, lang, onProgress, onProblem 
 export async function checkWord(word, lang, misBelow = MISPRONOUNCED_BELOW) {
   const SDK = await loadSdk();
   const t = await getToken();
-  const rec = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), SDK.AudioConfig.fromDefaultMicrophoneInput());
+  const mic = await openMic(SDK);
+  const rec = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), mic.audio);
   paConfig(SDK, word).applyTo(rec);
   try {
     const result = await new Promise((resolve, reject) => rec.recognizeOnceAsync(resolve, reject));
@@ -180,5 +209,6 @@ export async function checkWord(word, lang, misBelow = MISPRONOUNCED_BELOW) {
     return { ok, heard: w.word, acc: w.acc };
   } finally {
     rec.close();
+    mic.release();
   }
 }

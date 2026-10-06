@@ -389,3 +389,24 @@ test('Google hands back the answer to an empty request (a ping) instead of summi
     assert.deepEqual(app.errors, []);
   } finally { await app.close(); }
 });
+
+test('microphone: opened without echo cancellation (so sounds stay loud on Android) and released after the page', async () => {
+  const app = await startApp();
+  try {
+    await toFirstPage(app);
+    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 200 }; });
+    await app.page.click('#go-read');
+    await app.page.waitForSelector('#ready-banner:not([hidden])');
+    const during = await app.page.evaluate(() => {
+      const t = window.__micStream && window.__micStream.getAudioTracks()[0];
+      return t && { live: t.readyState, echo: t.getSettings().echoCancellation };
+    });
+    assert.ok(during, 'our own microphone stream was used');
+    assert.equal(during.live, 'live');
+    assert.equal(during.echo, false);
+    await app.page.click('#done-reading');
+    await app.screen('result');
+    const after = await app.page.evaluate(() => window.__micStream.getAudioTracks()[0].readyState);
+    assert.equal(after, 'ended', 'microphone released');
+  } finally { await app.close(); }
+});
