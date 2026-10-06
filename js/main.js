@@ -348,42 +348,42 @@ async function readingScreen(i, t0, started) {
     const durSec = Math.round((performance.now() - listenedAt) / 100) / 10;
     const { statuses, insertions, said } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
     log('score', 'aligned', { heard: heard.length, insertions, said, statuses: statuses.join(',') });
-    // The phone counts exactly like the server, so the result shows at once.
-    // The server still decides: buttons wait until it has saved and confirmed.
-    const attemptsBefore = state.session.pages[i].attempts;
+    // The phone counts exactly like the server (same rules, tested), so the result and the
+    // buttons are there at once; the reading is saved in the background, in order, with retries.
+    const p = state.session.pages[i];
+    const attemptsBefore = p.attempts;
     const local = summarize(statuses, insertions);
     const localBelow = pageBelow(local, state.child, story().wordCount);
     const errWords = statuses.map((t, k) => ({ w: ref[k], t })).filter((e) => e.t !== 'ok');
-    resultScreen(i, {
-      attempt: local, errWords, below: localBelow,
-      canRetry: localBelow && attemptsBefore + 1 < 2
-    }, statuses, said);
+    const shown = { attempt: local, errWords, below: localBelow, canRetry: localBelow && attemptsBefore + 1 < 2 };
+    p.attempts = attemptsBefore + 1;
+    if (!p.best || local.acc > p.best.acc) p.best = local;
+    resultScreen(i, shown, statuses, said);
+    resultActions(i, shown);
 
     // One id per reading: if the answer is lost on the way, sending again does not count twice.
     const attemptId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const submit = async () => {
+      // The page must be started on the server before its reading can be saved.
+      // If that first start never reached it, start it again now (the reading itself is done).
+      const s0 = await started.catch(() => call('startPage', { page: i, extra: state.extra }));
+      if (s0.expired) return s0;
+      return call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, attemptId, durSec });
+    };
+    const save = async () => {
       resultSaving('saving');
       try {
-        // The page must be started on the server before its reading can be saved.
-        // If that first start never reached it, start it again now (the reading itself is done).
-        const s0 = await started.catch(() => call('startPage', { page: i, extra: state.extra }));
-        if (s0.expired) return expiredScreen(s0.session);
-        const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, attemptId, durSec });
+        const res = await inBackground('submitPage', submit);
         if (res.expired) return expiredScreen(res.session);
-        const p = state.session.pages[i];
-        p.attempts = attemptsBefore + 1;
         p.best = res.best;
         if (res.attempt.acc !== local.acc) log('score', 'server and phone differ', { server: res.attempt, phone: local });
-        resultActions(i, res);
         resultSaving('saved');
       } catch (e) {
-        log('score', 'save failed', String(e && (e.code || e.message)));
         if (OUT_OF_STEP.has(e.code)) return resync(e, 'submitPage');
-        reportError('submitPage', e, 'result');
-        resultSaving('failed', submit); // resends this same reading, it does not start the page over
+        resultSaving('failed', save); // resends this same reading, it does not start the page over
       }
     };
-    submit();
+    save();
   }
 }
 
@@ -437,8 +437,9 @@ function resultActions(i, res) {
 
 function resultSaving(stateName, retry) {
   const el = $('save-state');
+  if (currentScreen !== 'result' && stateName !== 'failed') return;
   el.className = 'save-state ' + stateName;
-  el.textContent = { saving: 'שומרים את התוצאה…', saved: '', failed: 'השמירה לא הצליחה. ' }[stateName];
+  el.textContent = { saving: '', saved: '', failed: 'השמירה לא הצליחה. ' }[stateName];
   if (stateName === 'failed') {
     const b = document.createElement('button');
     b.type = 'button';
@@ -472,10 +473,33 @@ async function questionScreen(i) {
 }
 
 /**
- * The answer is checked on the phone at once (answer key in the story) and saved on the
- * server in the background, with retries. Without a key (older server) it waits as before.
+ * Saving in the background: up to 3 tries, 3 seconds apart; every failure is reported.
+ * finish() waits for whatever is still on its way.
  */
-const pendingAnswers = new Set();
+const pendingSaves = new Set();
+
+function inBackground(what, send) {
+  const p = (async () => {
+    for (let k = 1; ; k++) {
+      try {
+        return await send();
+      } catch (e) {
+        log('save', `${what} failed (try ${k})`, String(e && (e.code || e.message)));
+        reportError(what, e, currentScreen);
+        if (OUT_OF_STEP.has(e.code) || k >= 3) throw e;
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  })();
+  pendingSaves.add(p);
+  p.catch(() => {}).finally(() => pendingSaves.delete(p));
+  return p;
+}
+
+/**
+ * The answer is checked on the phone at once (answer key in the story) and saved on the
+ * server in the background. Without a key (older server) it waits as before.
+ */
 
 function answerNow(payload, qref, q) {
   const local = checkAnswer(state.session.id, qref, q, payload.choice);
@@ -489,20 +513,7 @@ function answerNow(payload, qref, q) {
 }
 
 function saveAnswer(payload) {
-  const p = (async () => {
-    for (let k = 1; ; k++) {
-      try {
-        return await call('answer', payload);
-      } catch (e) {
-        reportError('answer', e, currentScreen);
-        if (OUT_OF_STEP.has(e.code) || k >= 3) throw e;
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-    }
-  })();
-  pendingAnswers.add(p);
-  p.catch(() => {}).finally(() => pendingAnswers.delete(p));
-  return p;
+  return inBackground('answer', () => call('answer', payload));
 }
 
 async function finalScreen(f) {
@@ -523,8 +534,8 @@ async function finalScreen(f) {
 
 async function finish() {
   loading('מסכמים…');
-  // Answers still on their way to the server go first.
-  if (pendingAnswers.size) await Promise.allSettled([...pendingAnswers]);
+  // Readings and answers still on their way to the server go first.
+  if (pendingSaves.size) await Promise.allSettled([...pendingSaves]);
   try {
     const r = await call('finish', { extra: state.extra });
     state.session.finished = true;

@@ -255,7 +255,7 @@ function actPractice(child, req) {
 }
 
 function actFinish(child, req) {
-  var mail = null;
+  var after = null;
   var out = withLock(function () {
     var sess = loadActive(child, req);
     var s = sess.state;
@@ -270,12 +270,15 @@ function actFinish(child, req) {
     s.result = r;
     s.finished = true;
     saveSession(sess);
-    logSession(child, sess, r);
-    try { updateHardWords(child, sess); } catch (e) { logError(child.id, 'updateHardWords', e); }
-    mail = function () { sendSummaryMail(child, sess, r); };
+    after = function () {
+      try { logSession(child, sess, r); } catch (e) { logError(child.id, 'logSession', e); }
+      try { withLock(function () { updateHardWords(child, sess); }); } catch (e) { logError(child.id, 'updateHardWords', e); }
+      try { sendSummaryMail(child, sess, r); } catch (e) { logError(child.id, 'sendSummaryMail', e); }
+    };
     return { result: r, extraAllowed: !s.extra && r.passed && child.extraAllowed };
   });
-  if (mail) { try { mail(); } catch (e) { logError(child.id, 'sendSummaryMail', e); } }
+  // The story is finished and saved; the parent's log, hard words and mail come after the lock.
+  if (after) after();
   return out;
 }
 
