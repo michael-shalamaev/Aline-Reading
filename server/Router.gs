@@ -201,7 +201,11 @@ function actSubmitPage(child, req) {
     }
     var started = sess.state.pageStartedAt[i];
     if (!started) fail('page_not_started', 'Page was not started');
-    var a = scoreAttempt(sess.story.pages[i].text, req, (Date.now() - started) / 1000);
+    // The phone measures the reading itself (the server may hear of the start late);
+    // the server's own measure is the fallback.
+    var phoneSec = Number(req.durSec);
+    var dur = phoneSec > 0 && phoneSec < 1800 ? phoneSec : (Date.now() - started) / 1000;
+    var a = scoreAttempt(sess.story.pages[i].text, req, dur);
     a.id = id;
     p.attempts.push(a);
     p.best = bestIndex(p.attempts);

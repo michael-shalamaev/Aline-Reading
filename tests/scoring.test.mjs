@@ -47,13 +47,14 @@ test('skipped word is an omission, extra word an insertion', () => {
   assert.equal(summarize(r.statuses, r.insertions).errors, 2);
 });
 
-test('low accuracy or Mispronunciation is a pronunciation error', () => {
+test('pronunciation: only the score against the parent threshold counts, not the Microsoft label', () => {
   const ref = tokenize('The cat sat');
   const h = heard('the cat sat');
   h[1].acc = 30;
-  h[2].err = 'Mispronunciation';
-  const r = alignPage(ref, h);
-  assert.deepEqual(r.statuses, ['ok', 'mis', 'mis']);
+  h[2].acc = 58;
+  h[2].err = 'Mispronunciation'; // Microsoft labels everything under 60
+  assert.deepEqual(alignPage(ref, h, new Set(), 55).statuses, ['ok', 'mis', 'ok']);
+  assert.deepEqual(alignPage(ref, h, new Set(), 0).statuses, ['ok', 'ok', 'ok'], '0 = pronunciation never counts');
 });
 
 test('repeating a word to self-correct and fillers are not insertions', () => {

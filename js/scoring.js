@@ -5,7 +5,9 @@
 import { normWord, sameWord, looseFlags } from './text.js';
 import { MISPRONOUNCED_BELOW } from './config.js';
 
-const scoreOf = (h) => (h.err === 'Mispronunciation' ? -1 : (typeof h.acc === 'number' ? h.acc : 100));
+// Only the score counts, against the parent's threshold. Microsoft's own "Mispronunciation"
+// label uses its fixed cut at 60 and would override the parent's setting.
+const scoreOf = (h) => (typeof h.acc === 'number' ? h.acc : 100);
 
 // Microsoft often does not hear a short article in fluent reading ("still as a statue").
 // Such a word missing on its own, between words that were read, is not counted.
@@ -47,7 +49,7 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
         j++;
         if (scoreOf(heard[j]) > scoreOf(h)) h = heard[j];
       }
-      const bad = h.err === 'Mispronunciation' || (typeof h.acc === 'number' && h.acc < misBelow);
+      const bad = scoreOf(h) < misBelow;
       statuses[i] = bad ? 'mis' : 'ok';
       i++; j++;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {
