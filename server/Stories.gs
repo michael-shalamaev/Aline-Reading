@@ -11,29 +11,38 @@ var LEVEL_GUIDE = {
   'בינוני': 'CEFR B1: sentences up to 16 words, varied tenses, richer vocabulary suitable for a strong 10-12 year old reader.'
 };
 
-/** The model to use: the GEMINI_MODEL property, else the newest Flash model found. */
-function geminiModel() {
+/**
+ * Models to try, best first: the GEMINI_MODEL property if set, then the newest
+ * Flash models, then the Flash-Lite ones as a last resort. When one is busy
+ * (Google answers 503/429), the next one is tried.
+ */
+function geminiModels() {
+  var cached = CacheService.getScriptCache().get('gemini_models');
+  var list = cached ? JSON.parse(cached) : null;
+  if (!list) {
+    var res = UrlFetchApp.fetch(GEMINI_BASE + '/models?pageSize=200', {
+      headers: { 'x-goog-api-key': prop('GEMINI_API_KEY', true) },
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() !== 200) fail('gemini_error', 'List models failed: ' + res.getContentText().slice(0, 300));
+    var names = (JSON.parse(res.getContentText()).models || [])
+      .filter(function (m) { return (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0; })
+      .map(function (m) { return String(m.name || '').replace('models/', ''); });
+    var byVersion = function (a, b) { return versionOf(b) - versionOf(a); };
+    var flash = names.filter(function (n) { return /^gemini-[\d.]+-flash$/.test(n); }).sort(byVersion);
+    var lite = names.filter(function (n) { return /^gemini-[\d.]+-flash-lite$/.test(n); }).sort(byVersion);
+    list = flash.slice(0, 2).concat(lite.slice(0, 1));
+    if (!list.length) fail('gemini_error', 'No Flash model available. Set GEMINI_MODEL.');
+    CacheService.getScriptCache().put('gemini_models', JSON.stringify(list), 21600);
+  }
   var fixed = prop('GEMINI_MODEL');
-  if (fixed) return fixed;
-  var cached = CacheService.getScriptCache().get('gemini_model');
-  if (cached) return cached;
+  if (fixed) list = [fixed].concat(list.filter(function (n) { return n !== fixed; }));
+  return list;
+}
 
-  var res = UrlFetchApp.fetch(GEMINI_BASE + '/models?pageSize=200', {
-    headers: { 'x-goog-api-key': prop('GEMINI_API_KEY', true) },
-    muteHttpExceptions: true
-  });
-  if (res.getResponseCode() !== 200) fail('gemini_error', 'List models failed: ' + res.getContentText().slice(0, 300));
-  var models = (JSON.parse(res.getContentText()).models || [])
-    .filter(function (m) {
-      var n = m.name || '';
-      return /gemini-[\d.]+-flash$/.test(n) &&
-        (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0;
-    })
-    .map(function (m) { return m.name.replace('models/', ''); })
-    .sort(function (a, b) { return versionOf(b) - versionOf(a); });
-  if (!models.length) fail('gemini_error', 'No Flash model available. Set GEMINI_MODEL.');
-  CacheService.getScriptCache().put('gemini_model', models[0], 21600);
-  return models[0];
+/** The first-choice model (shown by selfTest). */
+function geminiModel() {
+  return geminiModels()[0];
 }
 
 function versionOf(name) {
@@ -105,7 +114,7 @@ function storyPrompt(child, topic, withQuestions) {
   ].join('\n');
 }
 
-/** Calls Gemini and returns a checked story object. Retries once on a bad answer. */
+/** Calls Gemini and returns a checked story object. A bad story is retried once. */
 function generateStory(child, topic, withQuestions) {
   var lastErr = null;
   for (var attempt = 1; attempt <= 2; attempt++) {
@@ -115,38 +124,49 @@ function generateStory(child, topic, withQuestions) {
     } catch (e) {
       lastErr = e;
       logError(child.id, 'generateStory#' + attempt, e);
+      if (e.code === 'gemini_busy') break; // every model already tried; another round would only add waiting
     }
   }
   throw lastErr;
 }
 
+var GEMINI_TRY_NEXT = { 404: 1, 429: 1, 500: 1, 503: 1 };
+
+/** Sends the prompt to the first model that answers; busy or missing models are skipped. */
 function callGemini(prompt) {
-  var model = geminiModel();
-  var res = UrlFetchApp.fetch(GEMINI_BASE + '/models/' + model + ':generateContent', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': prop('GEMINI_API_KEY', true) },
-    muteHttpExceptions: true,
-    payload: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: storySchema(),
-        temperature: 1
-      }
-    })
-  });
-  var code = res.getResponseCode();
-  var body = res.getContentText();
-  if (code !== 200) {
-    if (code === 404) CacheService.getScriptCache().remove('gemini_model');
-    fail('gemini_error', 'Gemini ' + code + ': ' + body.slice(0, 300));
+  var models = geminiModels();
+  var notes = [];
+  for (var i = 0; i < models.length; i++) {
+    var res = UrlFetchApp.fetch(GEMINI_BASE + '/models/' + models[i] + ':generateContent', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': prop('GEMINI_API_KEY', true) },
+      muteHttpExceptions: true,
+      payload: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: storySchema(),
+          temperature: 1
+        }
+      })
+    });
+    var code = res.getResponseCode();
+    var body = res.getContentText();
+    if (code === 200) {
+      var data = JSON.parse(body);
+      var text = data.candidates && data.candidates[0] && data.candidates[0].content &&
+        data.candidates[0].content.parts.map(function (p) { return p.text || ''; }).join('');
+      if (!text) fail('gemini_error', models[i] + ' gave an empty answer: ' + body.slice(0, 300));
+      var story = JSON.parse(text);
+      story._model = models[i];
+      return story;
+    }
+    notes.push(models[i] + ' ' + code);
+    if (code === 404) CacheService.getScriptCache().remove('gemini_models');
+    if (!GEMINI_TRY_NEXT[code]) fail('gemini_error', 'Gemini ' + code + ': ' + body.slice(0, 300));
   }
-  var data = JSON.parse(body);
-  var text = data.candidates && data.candidates[0] && data.candidates[0].content &&
-    data.candidates[0].content.parts.map(function (p) { return p.text || ''; }).join('');
-  if (!text) fail('gemini_error', 'Empty answer: ' + body.slice(0, 300));
-  return JSON.parse(text);
+  fail('gemini_busy', 'All models busy: ' + notes.join(', '));
 }
 
 function validateQuestion(q, where) {
@@ -179,6 +199,7 @@ function validateStory(s, child) {
   }
   if (!s.finalQuestions || s.finalQuestions.length < 3) fail('bad_story', 'Missing final questions');
   return {
+    model: s._model || '',
     title: String(s.title || 'A Story'),
     topicUsed: String(s.topicUsed || ''),
     topicAdjusted: !!s.topicAdjusted,

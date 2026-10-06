@@ -38,6 +38,7 @@ const MESSAGES = {
   locked: 'הקריאה כבר התחילה, אי אפשר להחליף סיפור.',
   no_regen_left: 'נגמרו ההחלפות להיום. נקרא את הסיפור הזה!',
   gemini_error: 'לא הצלחנו לכתוב סיפור כרגע. מנסים שוב בעוד רגע.',
+  gemini_busy: 'כותב הסיפורים עמוס כרגע. מחכים דקה ומנסים שוב.',
   bad_story: 'הסיפור יצא לא טוב. מנסים שוב.',
   speech_token_error: 'בדיקת הקריאה לא זמינה כרגע.',
   speech_sdk_unavailable: 'רכיב זיהוי הדיבור לא נטען. בודקים את החיבור ומנסים שוב.',
@@ -148,7 +149,8 @@ async function makeStory(topic) {
   state.lastTopic = topic;
   loading('כותבים בשבילך סיפור חדש… זה לוקח בערך חצי דקה');
   try {
-    state.session = await call('newStory', { topic, extra: state.extra });
+    const sess = await call('newStory', { topic, extra: state.extra });
+    state.session = sess && sess.story ? sess : await recoverSession();
     previewScreen();
   } catch (e) {
     if (e.code === 'no_regen_left' || e.code === 'locked') {
@@ -157,6 +159,18 @@ async function makeStory(topic) {
     }
     showError(e, () => makeStory(topic));
   }
+}
+
+/**
+ * A story request can come back without a story (a long request cut off on the way).
+ * The story may still have been saved, so ask the server where we stand.
+ */
+async function recoverSession() {
+  log('ui', 'story answer without a story, checking the server');
+  const data = await call('init');
+  const sess = state.extra ? data.extraSession : data.session;
+  if (sess && sess.story) return sess;
+  throw new ApiError('bad_story');
 }
 
 function previewScreen() {

@@ -135,6 +135,9 @@ export function loadServer(options = {}) {
           ] });
         }
         if (url.includes(':generateContent')) {
+          const model = url.match(/models\/([^:]+):/)[1];
+          fetches.push('model:' + model);
+          if ((options.busyModels || []).includes(model)) return reply(503, '{"error":{"status":"UNAVAILABLE"}}');
           if (geminiFailures > 0) { geminiFailures--; return reply(500, 'boom'); }
           const prompt = JSON.parse(opts.payload).contents[0].parts[0].text;
           const story = fakeStory(prompt, options);
