@@ -30,7 +30,13 @@ export class ApiError extends Error {
   }
 }
 
+// Server clock minus phone clock. Each answer carries the server's time, but Google can hold
+// a request for many seconds before or after the script runs, so a single answer can be off
+// by half its round trip. Only the quickest answer seen (smallest possible error) is used;
+// after 10 minutes a new one may replace it.
 let clockOffset = 0;
+let bestRtt = Infinity;
+let bestAt = 0;
 
 /** Server time in ms (phone clocks can be off; the time window is measured on the server). */
 export function serverNow() {
@@ -126,7 +132,12 @@ export async function callOnce(action, payload = {}) {
   }
 
   const ms = took();
-  if (json.t) clockOffset = json.t - Date.now() + ms / 2;
+  if (json.t && (ms < bestRtt || Date.now() - bestAt > 10 * 60000)) {
+    clockOffset = Math.round(json.t - Date.now() + ms / 2);
+    bestRtt = ms;
+    bestAt = Date.now();
+    log('api', `clock: server minus phone ${clockOffset}ms (±${Math.round(ms / 2)}ms)`);
+  }
   const where = json.ms !== undefined ? `, script ${json.ms}ms, lock wait ${json.lockMs}ms` : '';
   if (!warnedVersion && json.v && json.v !== VERSION) {
     warnedVersion = true;

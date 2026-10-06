@@ -512,8 +512,16 @@ function answerNow(payload, qref, q) {
   return Promise.resolve(local);
 }
 
+// Answers the server has not confirmed yet. If saving them failed, finish() sends them
+// again, so she is never asked the same questions twice.
+const unsavedAnswers = new Map();
+
 function saveAnswer(payload) {
-  return inBackground('answer', () => call('answer', payload));
+  const key = payload.kind === 'final' ? 'f' + payload.index : 'p' + payload.page;
+  unsavedAnswers.set(key, payload);
+  const p = inBackground('answer', () => call('answer', payload));
+  p.then(() => unsavedAnswers.delete(key), () => {});
+  return p;
 }
 
 async function finalScreen(f) {
@@ -536,6 +544,11 @@ async function finish() {
   loading('מסכמים…');
   // Readings and answers still on their way to the server go first.
   if (pendingSaves.size) await Promise.allSettled([...pendingSaves]);
+  // Answers whose saving failed: once more, before summing up.
+  for (const [key, payload] of [...unsavedAnswers]) {
+    log('quiz', 'sending an unsaved answer again', key);
+    try { await call('answer', payload); unsavedAnswers.delete(key); } catch (e) { reportError('answer (before finish)', e, 'loading'); }
+  }
   try {
     const r = await call('finish', { extra: state.extra });
     state.session.finished = true;

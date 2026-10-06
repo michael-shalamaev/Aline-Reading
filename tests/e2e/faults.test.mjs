@@ -299,3 +299,53 @@ test('summing up: Google returns its error page though the story was finished â€
     assert.equal(app.server.mails.length, 1, 'one mail, not two');
   } finally { await app.close(); }
 });
+
+test('the countdown clock: a slow answer from Google does not move it', async () => {
+  const skew = 5 * 60000; // the phone's clock is 5 minutes behind the server's
+  const app = await startApp({
+    timeoutMs: 15000,
+    realClockSkewMs: skew,
+    fault: (r) => (r.action === 'startPage' ? { delayAfterMs: 4000 } : null)
+  });
+  try {
+    await toFirstPage(app);
+    const offset = () => app.page.evaluate(async () => (await import('/js/api.js')).serverNow() - Date.now());
+    const before = await offset();
+    assert.ok(Math.abs(before - skew) < 1000, `offset ${before}`);
+    // A slow reading; the page's start answer comes back 4 seconds after the server's time.
+    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 150 }; });
+    await app.page.click('#go-read');
+    await new Promise((r) => setTimeout(r, 5000));
+    const after = await offset();
+    assert.ok(Math.abs(after - skew) < 1000, `offset moved to ${after} (error ${after - skew}ms)`);
+  } finally { await app.close(); }
+});
+
+test('final answers that failed to save are sent again before summing up; the questions are not asked twice', async () => {
+  let finalTries = 0;
+  const app = await startApp({
+    fault: (r) => (r.action === 'answer' && r.kind === 'final' && ++finalTries <= 18 ? { html: 'before' } : null)
+  });
+  try {
+    await toFirstPage(app);
+    const k = app.code;
+    const st = app.session().story;
+    st.pages.forEach((pg, i) => {
+      app.server.api({ action: 'startPage', page: i, k });
+      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    });
+    await app.open();
+    const asked = [];
+    for (let f = 0; f < 3; f++) {
+      await app.screen('question');
+      asked.push(await app.page.textContent('#q-label'));
+      await app.page.click('.option[data-i="1"]');
+      await app.page.waitForSelector('.next:not([hidden])');
+      await app.page.click('.next');
+    }
+    await app.screen('summary', 40000);
+    assert.equal(asked.length, 3);
+    assert.ok(app.session().finalAnswers.every((a) => a && a.choice === 1));
+  } finally { await app.close(); }
+});

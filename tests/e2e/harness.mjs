@@ -22,10 +22,11 @@ export const GOOGLE_ERROR_PAGE = '<!DOCTYPE html><html><head><title>Error</title
 
 /**
  * fault(req, n) is asked before each script request (n counts requests per action, from 1)
- * and may return: { delayMs, html: 'before'|'after', drop: 'before'|'after' }.
+ * and may return: { delayMs, delayAfterMs, html: 'before'|'after', drop: 'before'|'after' }.
+ * realClockSkewMs: the server's clock follows real time, this far ahead of the phone's.
  * 'after' means the server did the work and saved, but the phone does not get the answer.
  */
-export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpts = {}, timePerCallMs = 40000 } = {}) {
+export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpts = {}, timePerCallMs = 40000, realClockSkewMs = null } = {}) {
   const server = loadServer(serverOpts);
   server.ctx.setup();
   const code = server.book().getSheetByName('הגדרות').rows().find((r) => r[0] === 'code')[2];
@@ -51,8 +52,10 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
       if (f.delayMs) await new Promise((r) => setTimeout(r, f.delayMs));
       if (f.html === 'before') return route.fulfill({ status: 200, contentType: 'text/html', body: GOOGLE_ERROR_PAGE });
       if (f.drop === 'before') return route.abort('connectionreset').catch(() => {});
-      server.clock.now += timePerCallMs;
+      if (realClockSkewMs !== null) server.clock.now = Date.now() + realClockSkewMs;
+      else server.clock.now += timePerCallMs;
       const res = server.api(req);
+      if (f.delayAfterMs) await new Promise((r) => setTimeout(r, f.delayAfterMs));
       if (f.html === 'after') return route.fulfill({ status: 200, contentType: 'text/html', body: GOOGLE_ERROR_PAGE });
       if (f.drop === 'after') return route.abort('connectionreset').catch(() => {});
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(f.replace ? f.replace(res) : res) }).catch(() => {});
