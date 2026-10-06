@@ -143,7 +143,10 @@ function actStartPage(child, req) {
     if (!sess.state.startedAt) sess.state.startedAt = Date.now();
     sess.state.pageStartedAt[i] = Date.now();
     saveSession(sess);
-    return { expired: false, startedAt: sess.state.startedAt };
+    // The speech token rides along, saving the phone a second round trip.
+    var token = null;
+    try { token = issueSpeechToken(); } catch (e) { logError(child.id, 'startPage token', e); }
+    return { expired: false, startedAt: sess.state.startedAt, speech: token };
   });
 }
 
@@ -151,32 +154,45 @@ function actSpeechToken() {
   return issueSpeechToken();
 }
 
+function submitAnswer(child, sess, i, a) {
+  var p = sess.state.pages[i];
+  var below = pageBelowBar(child, a, sess.story.wordCount);
+  return {
+    expired: false,
+    attempt: summaryOfAttempt(a),
+    errWords: a.errWords,
+    below: below,
+    canRetry: below && p.attempts.length < MAX_ATTEMPTS,
+    best: summaryOfAttempt(p.attempts[p.best])
+  };
+}
+
 function actSubmitPage(child, req) {
   return withLock(function () {
     var sess = loadActive(child, req);
+    var i = pageIndex(sess, req);
+    var p = sess.state.pages[i];
+    // The phone may send the same attempt twice (it retries after a timeout): answer, don't count again.
+    var id = String(req.attemptId || '');
+    if (id) {
+      for (var k = 0; k < p.attempts.length; k++) {
+        if (p.attempts[k].id === id) return submitAnswer(child, sess, i, p.attempts[k]);
+      }
+    }
     if (checkWindow(sess, child)) {
       saveSession(sess);
       return { expired: true, session: publicSession(sess, child) };
     }
-    var i = pageIndex(sess, req);
     var started = sess.state.pageStartedAt[i];
     if (!started) fail('page_not_started', 'Page was not started');
-    var p = sess.state.pages[i];
     var a = scoreAttempt(sess.story.pages[i].text, req, (Date.now() - started) / 1000);
+    a.id = id;
     p.attempts.push(a);
     p.best = bestIndex(p.attempts);
     delete sess.state.pageStartedAt[i];
-    var below = pageBelowBar(child, a, sess.story.wordCount);
-    logPageAttempt(child, sess, i, p.attempts.length, a, below);
     saveSession(sess);
-    return {
-      expired: false,
-      attempt: summaryOfAttempt(a),
-      errWords: a.errWords,
-      below: below,
-      canRetry: below && p.attempts.length < MAX_ATTEMPTS,
-      best: summaryOfAttempt(p.attempts[p.best])
-    };
+    logPageAttempt(child, sess, i, p.attempts.length, a, pageBelowBar(child, a, sess.story.wordCount));
+    return submitAnswer(child, sess, i, a);
   });
 }
 

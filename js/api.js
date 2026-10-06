@@ -44,7 +44,22 @@ export function hasCode() {
  * Sends {action, k, ...payload}. text/plain keeps the browser from a CORS
  * pre-flight request, which Apps Script does not answer.
  */
+// Safe to send twice: the server recognises a repeat (attemptId, first answer wins) or only reads.
+const RETRY_ON_TIMEOUT = new Set(['init', 'speechToken', 'startPage', 'submitPage', 'answer']);
+
 export async function call(action, payload = {}) {
+  try {
+    return await callOnce(action, payload);
+  } catch (e) {
+    if (RETRY_ON_TIMEOUT.has(action) && (e.code === 'timeout' || e.code === 'network')) {
+      log('api', `retry ${action} after ${e.code}`);
+      return callOnce(action, payload);
+    }
+    throw e;
+  }
+}
+
+async function callOnce(action, payload) {
   if (!SCRIPT_URL || SCRIPT_URL.startsWith('PASTE')) throw new ApiError('not_configured', 'SCRIPT_URL is not set');
   const timeout = action === 'newStory' ? API_TIMEOUT_STORY_MS : API_TIMEOUT_MS;
   const ctrl = new AbortController();

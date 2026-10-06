@@ -11,9 +11,10 @@ const FILLERS = new Set(['um', 'uh', 'ah', 'eh', 'hmm', 'mm', 'er', 'erm', 'oh']
  * @param {string[]} ref    page words, as displayed
  * @param {{word:string, acc:number, err:string}[]} heard  words from Microsoft, in order
  * @param {Set<number>} hinted  indexes of words the child asked to hear
+ * @param {number} misBelow  Microsoft score under which a word counts as mispronounced
  * @returns {{statuses:string[], insertions:number}}  status: ok | om | mis | hint
  */
-export function alignPage(ref, heard, hinted = new Set()) {
+export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNCED_BELOW) {
   const R = ref.map(normWord);
   const L = looseFlags(ref);
   const H = heard.map((h) => normWord(h.word));
@@ -33,7 +34,7 @@ export function alignPage(ref, heard, hinted = new Set()) {
   while (i < n && j < m) {
     if (sameWord(R[i], H[j], L[i]) && dp[i][j] === dp[i + 1][j + 1] + 1) {
       const h = heard[j];
-      const bad = h.err === 'Mispronunciation' || (typeof h.acc === 'number' && h.acc < MISPRONOUNCED_BELOW);
+      const bad = h.err === 'Mispronunciation' || (typeof h.acc === 'number' && h.acc < misBelow);
       statuses[i] = bad ? 'mis' : 'ok';
       i++; j++;
     } else if (dp[i + 1][j] >= dp[i][j + 1]) {

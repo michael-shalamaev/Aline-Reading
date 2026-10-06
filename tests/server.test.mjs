@@ -244,3 +244,26 @@ test('selfTest reports every check', () => {
   const report = s.ctx.selfTest();
   assert.equal(report.filter((l) => l.startsWith('❌')).length, 0, report.join('\n'));
 });
+
+test('a reading sent twice (lost answer, phone retries) counts once', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'x' }).data.story;
+  const st = s.k({ action: 'startPage', page: 0 }).data;
+  assert.equal(st.speech.region, 'westeurope', 'the speech token comes with startPage');
+  s.clock.now += 60000;
+  const words = Array(tokenize(story.pages[0].text).length).fill('om');
+  const a = s.k({ action: 'submitPage', page: 0, words, insertions: 0, attemptId: 'r1' }).data;
+  const b = s.k({ action: 'submitPage', page: 0, words, insertions: 0, attemptId: 'r1' }).data;
+  assert.deepEqual(a, b);
+  assert.equal(b.canRetry, true, 'the retry is still available');
+  assert.equal(s.book().getSheetByName('עמודים').rows().length, 2, 'logged once');
+});
+
+test('pronunciation sensitivity: in the settings, sent to the page, added to older sheets', () => {
+  const s = ready();
+  assert.equal(s.k({ action: 'init' }).data.child.pronThreshold, 40);
+  const sh = s.book().getSheetByName('הגדרות');
+  sh.data = sh.data.filter((r) => r[0] !== 'pronThreshold');
+  s.ctx.setup();
+  assert.ok(sh.rows().some((r) => r[0] === 'pronThreshold' && r[2] === 40));
+});

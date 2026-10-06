@@ -44,10 +44,26 @@ function setup() {
     st.setColumnWidth(3, 220);
     st.getRange('A:A').setFontColor('#888888');
   }
+  addMissingSettings(st);
   writeLinks();
   clearSettingsCache();
   Logger.log('הגיליון מוכן: ' + book.getUrl());
   readChildren().forEach(function (c) { Logger.log(c.name + ': ' + c.link); });
+}
+
+/** New settings from a code update get their row, with the default for every child. */
+function addMissingSettings(st) {
+  var values = st.getDataRange().getValues();
+  var have = {};
+  values.forEach(function (r) { have[String(r[0])] = true; });
+  var width = Math.max(3, values[0].length);
+  SETTING_DEFS.forEach(function (d) {
+    if (have[d.key]) return;
+    var row = [d.key, d.label];
+    for (var c = 2; c < width; c++) row.push(d.def);
+    st.appendRow(row);
+    Logger.log('נוספה הגדרה חדשה: ' + d.key);
+  });
 }
 
 /** Adds a column for another child, with defaults and a new secret code. */

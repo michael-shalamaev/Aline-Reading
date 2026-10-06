@@ -11,7 +11,8 @@ export const SPEECH_SDK_URLS = [
   'https://aka.ms/csspeech/jsbrowserpackageraw'
 ];
 
-// A word Microsoft scored below this (0-100) counts as mispronounced.
+// A word Microsoft scored below this (0-100) counts as mispronounced, unless the
+// parent set another value in the sheet (pronThreshold).
 export const MISPRONOUNCED_BELOW = 60;
 
 // Reading stops by itself this long after the last word was heard (ms).
@@ -21,5 +22,5 @@ export const AUTO_STOP_AFTER_LAST_WORD_MS = 1800;
 export const MAX_PAGE_MS = 8 * 60 * 1000;
 
 // Requests to the script give up after this long (ms). Story creation is slow.
-export const API_TIMEOUT_MS = 25000;
+export const API_TIMEOUT_MS = 60000;
 export const API_TIMEOUT_STORY_MS = 90000;

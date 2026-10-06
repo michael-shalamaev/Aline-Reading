@@ -9,7 +9,7 @@ import { alignPage, followPosition } from './scoring.js';
 import { renderPage, setPosition, markHint, showStatuses, onWordTap } from './reader.js';
 import { renderPrep, renderPractice } from './practice.js';
 import { askQuestion } from './quiz.js';
-import { startReading, loadSdk } from './speech.js';
+import { startReading, loadSdk, setToken } from './speech.js';
 import { speak } from './tts.js';
 import { log, isDebug } from './debug.js';
 
@@ -204,6 +204,7 @@ async function beginPage(i) {
   try {
     const r = await call('startPage', { page: i, extra: state.extra });
     if (r.expired) return expiredScreen(r.session);
+    setToken(r.speech);
     state.session.locked = true;
     state.session.startedAt = r.startedAt;
     await readingScreen(i);
@@ -226,15 +227,17 @@ async function readingScreen(i) {
       : '';
   };
   updateHints();
-  $('mic-state').textContent = 'מתחברים…';
+  $('mic-state').textContent = 'רגע… מכינים את המיקרופון';
   $('mic-state').className = 'mic';
   $('done-reading').disabled = true;
+  $('page-text').classList.add('waiting');
+  $('ready-banner').hidden = true;
   show('reading');
 
   let position = 0;
   let autoStop = null;
   let finished = false;
-  const safety = setTimeout(() => finishPage(), MAX_PAGE_MS);
+  let safety = null;
 
   onWordTap($('page-text'), (idx, word) => {
     if (hintsMax <= 0 || finished) return;
@@ -266,6 +269,11 @@ async function readingScreen(i) {
     clearTimeout(safety);
     return showError(e, () => beginPage(i));
   }
+  // Only now is anything heard: tell the child clearly that she can start.
+  safety = setTimeout(() => finishPage(), MAX_PAGE_MS);
+  $('page-text').classList.remove('waiting');
+  $('ready-banner').hidden = false;
+  setTimeout(() => { $('ready-banner').hidden = true; }, 2500);
   setPosition(spans, 0);
   $('mic-state').textContent = 'מקשיבים… קוראים בקול';
   $('mic-state').className = 'mic on';
@@ -281,19 +289,24 @@ async function readingScreen(i) {
     $('mic-state').className = 'mic';
     $('done-reading').disabled = true;
     const heard = await session.stop();
-    const { statuses, insertions } = alignPage(ref, heard, state.hinted);
+    const { statuses, insertions } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
     log('score', 'aligned', { heard: heard.length, insertions, statuses: statuses.join(',') });
-    loading('בודקים את הקריאה…');
-    try {
-      const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions });
-      if (res.expired) return expiredScreen(res.session);
-      const p = state.session.pages[i];
-      p.attempts += 1;
-      p.best = res.best;
-      resultScreen(i, res, statuses);
-    } catch (e) {
-      showError(e, () => prepScreen(i));
-    }
+    // One id per reading: if the answer is lost on the way, sending again does not count twice.
+    const attemptId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const submit = async () => {
+      loading('בודקים את הקריאה…');
+      try {
+        const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, attemptId });
+        if (res.expired) return expiredScreen(res.session);
+        const p = state.session.pages[i];
+        p.attempts += 1;
+        p.best = res.best;
+        resultScreen(i, res, statuses);
+      } catch (e) {
+        showError(e, submit); // "try again" resends this same reading, it does not start the page over
+      }
+    };
+    submit();
   }
 }
 
@@ -368,6 +381,12 @@ async function finish() {
     clearInterval(timerHandle);
     summaryScreen(r.result, r.extraAllowed);
   } catch (e) {
+    if (e.code === 'finished') {
+      // An earlier try did finish (its answer was lost on the way): show what the server has.
+      const data = await call('init').catch(() => null);
+      const sess = data && (state.extra ? data.extraSession : data.session);
+      if (sess && sess.result) { state.session = sess; return summaryScreen(sess.result, !state.extra && sess.result.passed && state.child.extraAllowed); }
+    }
     showError(e, finish);
   }
 }

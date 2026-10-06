@@ -37,6 +37,11 @@ export function loadSdk() {
   return sdkPromise;
 }
 
+/** A token that arrived with another answer (startPage), so no separate request is needed. */
+export function setToken(t) {
+  if (t && t.token) token = { token: t.token, region: t.region, expiresAt: Date.now() + t.ttlSec * 1000 };
+}
+
 /** A valid token, fetched again when less than 90 seconds are left. */
 async function getToken() {
   if (token && token.expiresAt - Date.now() > 90000) return token;

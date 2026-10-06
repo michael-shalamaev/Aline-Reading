@@ -25,7 +25,11 @@ export function speak(text, lang = 'en-US', rate = 0.8) {
     u.rate = rate;
     if (voice) u.voice = voice;
     u.onend = resolve;
-    u.onerror = (e) => { log('tts', 'error', e.error); resolve(); };
+    u.onerror = (e) => {
+      // Tapping another word cuts the previous one short: that is not a problem.
+      if (e.error !== 'interrupted' && e.error !== 'canceled') log('tts', 'error', e.error);
+      resolve();
+    };
     speechSynthesis.speak(u);
   });
 }
