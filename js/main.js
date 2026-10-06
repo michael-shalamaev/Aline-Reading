@@ -492,6 +492,8 @@ function inBackground(what, send) {
         return await send();
       } catch (e) {
         log('save', `${what} failed (try ${k})`, String(e && (e.code || e.message)));
+        // The story was summed up meanwhile (the answer went along with it): nothing left to do.
+        if (e.code === 'finished' || (state.session && state.session.finished)) throw e;
         reportError(what, e, currentScreen);
         if (OUT_OF_STEP.has(e.code) || k >= 3) throw e;
         await new Promise((r) => setTimeout(r, 3000));
@@ -519,16 +521,8 @@ function answerNow(payload, qref, q) {
   return Promise.resolve(local);
 }
 
-// Answers the server has not confirmed yet. If saving them failed, finish() sends them
-// again, so she is never asked the same questions twice.
-const unsavedAnswers = new Map();
-
 function saveAnswer(payload) {
-  const key = payload.kind === 'final' ? 'f' + payload.index : 'p' + payload.page;
-  unsavedAnswers.set(key, payload);
-  const p = inBackground('answer', () => call('answer', payload));
-  p.then(() => unsavedAnswers.delete(key), () => {});
-  return p;
+  return inBackground('answer', () => call('answer', payload));
 }
 
 async function finalScreen(f) {
@@ -549,15 +543,16 @@ async function finalScreen(f) {
 
 async function finish() {
   loading('מסכמים…');
-  // Readings and answers still on their way to the server go first.
-  if (pendingSaves.size) await Promise.allSettled([...pendingSaves]);
-  // Answers whose saving failed: once more, before summing up.
-  for (const [key, payload] of [...unsavedAnswers]) {
-    log('quiz', 'sending an unsaved answer again', key);
-    try { await call('answer', payload); unsavedAnswers.delete(key); } catch (e) { reportError('answer (before finish)', e, 'loading'); }
-  }
+  // No waiting for background saves: requests go out in order, so readings still on their
+  // way reach the server first; and every answer goes along with this request, so one whose
+  // own save was lost is not asked again.
+  const s = state.session;
+  const answers = {
+    pages: s.pages.map((p) => (p.answered ? p.answered.choice : null)),
+    final: s.finalAnswers.map((a) => (a ? a.choice : null))
+  };
   try {
-    const r = await call('finish', { extra: state.extra });
+    const r = await call('finish', { extra: state.extra, answers });
     state.session.finished = true;
     state.session.result = r.result;
     if (!state.extra) state.mainResult = r.result;

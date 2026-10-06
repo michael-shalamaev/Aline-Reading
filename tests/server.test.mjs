@@ -423,3 +423,30 @@ test('the story prompt does not describe the reader beyond what the story needs'
   const p = s.ctx.storyPrompt(child, 'x', true);
   assert.doesNotMatch(p, /girl|Israel|romance|adult/i);
 });
+
+test('finish fills in answers the phone sends whose own save was lost; a saved answer is never changed', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  story.pages.forEach((p, i) => {
+    s.k({ action: 'startPage', page: i });
+    s.k({ action: 'submitPage', page: i, words: tokenize(p.text).map(() => 'ok'), insertions: 0, attemptId: 'a' + i });
+  });
+  s.k({ action: 'answer', kind: 'page', page: 0, choice: 1 });
+  const r = s.k({ action: 'finish', answers: { pages: [3, 1, 1, 1, 1], final: [1, 0, 1] } });
+  assert.equal(r.ok, true, JSON.stringify(r.error));
+  const sess = s.k({ action: 'init' }).data.session;
+  assert.deepEqual(sess.pages[0].answered, { choice: 1, correct: true }, 'kept the first answer');
+  assert.deepEqual(sess.finalAnswers[1], { choice: 0, correct: false });
+  assert.equal(r.data.result.quizCorrect, 7);
+});
+
+test('finish without all answers still says too_early', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  story.pages.forEach((p, i) => {
+    s.k({ action: 'startPage', page: i });
+    s.k({ action: 'submitPage', page: i, words: tokenize(p.text).map(() => 'ok'), insertions: 0, attemptId: 'a' + i });
+  });
+  const r = s.k({ action: 'finish', answers: { pages: [1, 1, 1, 1, null], final: [1, 1, 1] } });
+  assert.equal(r.error.code, 'too_early');
+});

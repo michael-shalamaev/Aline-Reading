@@ -262,6 +262,17 @@ function actFinish(child, req) {
     if (s.pages.some(function (p) { return p.best < 0; })) fail('too_early', 'Not all pages were read');
     var withQuestions = !s.extra || child.extraQuestions;
     if (withQuestions) {
+      // The phone sends every answer it has with the finish request, so an answer whose own
+      // save got lost on the way is not asked again. An answer already saved is never changed.
+      var given = req.answers || {};
+      s.pages.forEach(function (p, i) {
+        var c = parseInt((given.pages || [])[i], 10);
+        if (!p.answer && c >= 0 && c <= 3) p.answer = { choice: c, correct: c === sess.story.pages[i].question.answer };
+      });
+      s.finalAnswers.forEach(function (a, f) {
+        var c = parseInt((given.final || [])[f], 10);
+        if (!a && c >= 0 && c <= 3) s.finalAnswers[f] = { choice: c, correct: c === sess.story.finalQuestions[f].answer };
+      });
       var missing = s.pages.some(function (p) { return !p.answer; }) ||
         s.finalAnswers.some(function (a) { return !a; });
       if (missing) fail('too_early', 'Not all questions were answered');

@@ -236,8 +236,8 @@ test('questions: right/wrong shows at once even when the server takes 6 seconds;
   } finally { await app.close(); }
 });
 
-test('an answer that never reaches the server is asked again before the summary, nothing breaks', async () => {
-  // Page 1's answer fails every time; the rest work.
+test('an answer whose every save fails goes along with summing up: not asked again, summary shown', async () => {
+  // Page 1's answer fails every time on its own; the rest work.
   const app = await startApp({ fault: (r) => (r.action === 'answer' && r.kind === 'page' && r.page === 0 ? { html: 'before' } : null) });
   try {
     await toFirstPage(app);
@@ -253,10 +253,8 @@ test('an answer that never reaches the server is asked again before the summary,
       await app.page.waitForSelector('.next:not([hidden])');
       await app.page.click('.next');
     }
-    // finish → too_early → the server's view → page 1's question again
-    await app.screen('question', 30000);
-    assert.match(await app.page.textContent('#q-label'), /עמוד 1/);
-    assert.ok(phoneRows(app).some((r) => /resync/.test(r[2])));
+    await app.screen('summary', 40000);
+    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true });
   } finally { await app.close(); }
 });
 
