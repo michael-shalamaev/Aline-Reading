@@ -23,6 +23,7 @@ const TYPES = { html: 'text/html', js: 'text/javascript', css: 'text/css', json:
 const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM || undefined });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, locale: 'he-IL' });
 const errors = [];
+let cutOffOnce = false;
 page.on('pageerror', (e) => errors.push(String(e)));
 page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(m.text()); if (process.env.VERBOSE) console.log('  [page]', m.text().slice(0, 200)); });
 
@@ -30,7 +31,10 @@ await page.route('**/*', async (route) => {
   const url = new URL(route.request().url());
   if (url.host === 'script.test') {
     server.clock.now += 40000;
-    const res = server.api(JSON.parse(route.request().postData()));
+    const req = JSON.parse(route.request().postData());
+    let res = server.api(req);
+    // Like the real phone saw once: the story is saved, but the answer that comes back is the ping.
+    if (req.action === 'newStory' && !cutOffOnce) { cutOffOnce = true; res = server.api({ action: 'ping' }); }
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(res) });
   }
   if (url.host === 'app.test') {

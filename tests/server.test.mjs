@@ -186,11 +186,25 @@ test('extra story only after passing, without questions by default', () => {
   assert.equal(init.data.extraSession, null, 'finished extra is not resumed');
 });
 
-test('a Gemini failure is retried once and logged', () => {
+test('a busy model is skipped: the next model writes the story', () => {
+  const s = ready({ busyModels: ['gemini-3.8-flash'] });
+  const r = s.k({ action: 'newStory', topic: 'x' });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const tried = s.fetches.filter((f) => f.startsWith('model:'));
+  assert.deepEqual(tried, ['model:gemini-3.8-flash', 'model:gemini-3.7-flash']);
+});
+
+test('all models busy: a clear error, one round only, logged', () => {
+  const s = ready({ busyModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.8-flash-lite'] });
+  const r = s.k({ action: 'newStory', topic: 'x' });
+  assert.equal(r.error.code, 'gemini_busy');
+  assert.equal(s.fetches.filter((f) => f.startsWith('model:')).length, 3);
+  assert.equal(s.book().getSheetByName('שגיאות').rows().length, 2);
+});
+
+test('a one-off server error moves on to the next model', () => {
   const s = ready({ geminiFailures: 1 });
   assert.equal(s.k({ action: 'newStory', topic: 'x' }).ok, true);
-  const errs = s.book().getSheetByName('שגיאות').rows();
-  assert.equal(errs.length, 2);
 });
 
 test('a story with the wrong page count is rejected', () => {
