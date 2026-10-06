@@ -120,16 +120,20 @@ button { font: inherit; cursor: pointer; }
 #page-text .w.current { background: var(--current); color: var(--ink); box-shadow: 0 0 0 2px var(--current); }
 #page-text .w.hint { background: var(--hint-soft); color: var(--hint); }
 
+/* Each kind of error looks different: skipped = grey and crossed out, another word = red box,
+   pronunciation = red wavy underline, hint = amber. */
 .result .w.st-ok { color: var(--good); }
-.result .w.st-om { background: var(--bad-soft); color: var(--bad); text-decoration: line-through; }
-.result .w.st-mis { background: var(--bad-soft); color: var(--bad); }
+.result .w.st-om { background: #e9e6e1; color: #8a8f93; text-decoration: line-through 2px; }
+.result .w.st-sub { background: var(--bad-soft); color: var(--bad); box-shadow: inset 0 0 0 2px var(--bad); font-weight: 700; }
+.result .w.st-mis { color: var(--bad); text-decoration: underline wavy var(--bad); text-underline-offset: 5px; }
 .result .w.st-hint { background: var(--hint-soft); color: var(--hint); }
 
 .legend { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .legend .k { padding: 2px 8px; border-radius: 6px; }
 .legend .ok { color: var(--good); }
-.legend .mis { background: var(--bad-soft); color: var(--bad); }
-.legend .om { background: var(--bad-soft); color: var(--bad); text-decoration: line-through; }
+.legend .om { background: #e9e6e1; color: #8a8f93; text-decoration: line-through 2px; }
+.legend .sub { background: var(--bad-soft); color: var(--bad); box-shadow: inset 0 0 0 2px var(--bad); font-weight: 700; }
+.legend .mis { color: var(--bad); text-decoration: underline wavy var(--bad); text-underline-offset: 5px; }
 .legend .hint { background: var(--hint-soft); color: var(--hint); }
 
 .bottom-bar {

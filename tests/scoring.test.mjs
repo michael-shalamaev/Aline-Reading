@@ -123,3 +123,42 @@ test('page verdict on the phone matches the server rule', () => {
   assert.equal(pageBelow({ acc: 0, errors: 8, n: 80 }, byErr, 400), false);
   assert.equal(pageBelow({ acc: 0, errors: 9, n: 80 }, byErr, 400), true);
 });
+
+test('another word said instead ("Natasha" for "Maya") is one error of its own, not a skip plus an extra word', () => {
+  const ref = tokenize('Maya runs to the big tree.');
+  const r = alignPage(ref, heard('natasha runs to the big tree'));
+  assert.deepEqual(r.statuses, ['sub', 'ok', 'ok', 'ok', 'ok', 'ok']);
+  assert.equal(r.said[0], 'natasha');
+  assert.equal(r.insertions, 0);
+  const s = summarize(r.statuses, r.insertions);
+  assert.equal(s.errors, 1);
+  assert.equal(s.sub, 1);
+});
+
+test('a skipped word stays a skip; a different word somewhere else stays an extra word', () => {
+  const ref = tokenize('The little cat sat on the warm red mat.');
+  const r = alignPage(ref, heard('the cat sat on the warm red soft mat'));
+  assert.equal(r.statuses[1], 'om');
+  assert.equal(r.insertions, 1);
+});
+
+test('two words replaced by one: one "another word", one skip', () => {
+  const ref = tokenize('She saw a big brown dog today.');
+  const r = alignPage(ref, heard('she saw a puppy dog today'));
+  assert.deepEqual(r.statuses.slice(3, 5).sort(), ['om', 'sub']);
+  assert.equal(r.insertions, 0);
+});
+
+test('answer key: phone and server compute the same, and only the right option matches', async () => {
+  const { answerKey, checkAnswer } = await import('../js/answers.js');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(readFileSync(new URL('../server/Util.gs', import.meta.url), 'utf8'), ctx);
+  for (const [id, ref, a] of [['5887a305', 'p0', 2], ['abc', 'f2', 0], ['x1y2z3w4', 'p11', 3]]) {
+    assert.equal(answerKey(id, ref, a), ctx.answerKey(id, ref, a));
+    const q = { options: ['a', 'b', 'c', 'd'], key: ctx.answerKey(id, ref, a) };
+    assert.deepEqual(checkAnswer(id, ref, q, a), { correct: true, choice: a, correctIndex: a });
+    assert.equal(checkAnswer(id, ref, q, (a + 1) % 4).correct, false);
+  }
+  assert.equal(checkAnswer('id', 'p0', { options: ['a', 'b'] }, 0), null, 'no key: wait for the server');
+});

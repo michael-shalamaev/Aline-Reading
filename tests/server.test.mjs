@@ -365,3 +365,28 @@ test('an error on the phone becomes a row in the errors tab, cut to size', () =>
   assert.equal(row[4].length, 4000);
   assert.equal(s.api({ action: 'clientError', k: 'bad' }).error.code, 'unauthorized');
 });
+
+test('"another word" is counted once, kept with what was said, and shown in the logs', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  s.k({ action: 'startPage', page: 0 });
+  const words = tokenize(story.pages[0].text).map(() => 'ok');
+  words[0] = 'sub';
+  words[1] = 'om';
+  const r = s.k({ action: 'submitPage', page: 0, words, insertions: 0, said: { 0: 'natasha' }, attemptId: 'q' });
+  assert.equal(r.data.attempt.errors, 2);
+  assert.equal(r.data.attempt.sub, 1);
+  assert.deepEqual(r.data.errWords[0], { w: tokenize(story.pages[0].text)[0], t: 'sub', said: 'natasha' });
+  const row = s.book().getSheetByName('עמודים').rows().at(-1);
+  assert.match(row[15], /מילה אחרת: natasha/);
+  assert.equal(row[16], 1);
+});
+
+test('questions reach the phone with a key that checks the answer, never the answer itself', () => {
+  const s = ready();
+  const sess = s.k({ action: 'newStory', topic: 'dragons' }).data;
+  const q = sess.story.pages[0].question;
+  assert.equal(q.answer, undefined);
+  assert.equal(q.key, s.ctx.answerKey(sess.id, 'p0', 1)); // the mock story's answer is option 1
+  assert.equal(sess.story.finalQuestions[2].key, s.ctx.answerKey(sess.id, 'f2', 1));
+});

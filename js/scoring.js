@@ -14,7 +14,9 @@ const FILLERS = new Set(['um', 'uh', 'ah', 'eh', 'hmm', 'mm', 'er', 'erm', 'oh']
  * @param {{word:string, acc:number, err:string}[]} heard  words from Microsoft, in order
  * @param {Set<number>} hinted  indexes of words the child asked to hear
  * @param {number} misBelow  Microsoft score under which a word counts as mispronounced
- * @returns {{statuses:string[], insertions:number}}  status: ok | om | mis | hint
+ * @returns {{statuses:string[], insertions:number, said:Object<number,string>}}
+ *   status: ok | om (skipped) | sub (another word said instead) | mis (pronunciation) | hint;
+ *   said: for each sub, the word that was said
  */
 export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNCED_BELOW) {
   const R = ref.map(normWord);
@@ -53,19 +55,36 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
   }
   while (j < m) unmatchedHeard.push({ j: j++, near: n });
 
-  // Extra words count as insertions, except fillers and a child repeating
-  // a neighbouring word while correcting herself ("the... the cat").
-  let insertions = 0;
-  for (const u of unmatchedHeard) {
+  // Extra words: fillers and a child repeating a neighbouring word while correcting
+  // herself ("the... the cat") are ignored.
+  const extra = unmatchedHeard.filter((u) => {
     const w = H[u.j];
-    if (!w || FILLERS.has(w)) continue;
+    if (!w || FILLERS.has(w)) return false;
     const neighbours = [R[u.near - 1], R[u.near], R[u.near + 1]];
-    if (neighbours.some((r) => r && sameWord(r, w))) continue;
-    insertions++;
+    return !neighbours.some((r) => r && sameWord(r, w));
+  });
+
+  // Another word said in place of a page word ("Natasha" for "Maya"): in a run of
+  // skipped page words, the extra words said at that spot replace them one for one.
+  // One error ("another word"), not a skip plus an added word.
+  const said = {};
+  const used = new Set();
+  for (let s = 0; s < n; s++) {
+    if (statuses[s] !== 'om') continue;
+    let e = s;
+    while (e + 1 < n && statuses[e + 1] === 'om') e++;
+    const here = extra.filter((u) => !used.has(u) && u.near >= s && u.near <= e + 1);
+    for (let t = 0; t < Math.min(here.length, e - s + 1); t++) {
+      statuses[s + t] = 'sub';
+      said[s + t] = heard[here[t].j].word;
+      used.add(here[t]);
+    }
+    s = e;
   }
+  const insertions = extra.length - used.size;
 
   hinted.forEach((k) => { if (k >= 0 && k < n) statuses[k] = 'hint'; });
-  return { statuses, insertions };
+  return { statuses, insertions, said };
 }
 
 /** Below the bar for one page? Same rule as server/Scoring.gs pageBelowBar. */
@@ -76,9 +95,9 @@ export function pageBelow(summary, child, storyWords) {
 
 /** Counts like the server does, to show the child a result instantly. */
 export function summarize(statuses, insertions) {
-  const c = { ok: 0, om: 0, mis: 0, hint: 0 };
+  const c = { ok: 0, om: 0, sub: 0, mis: 0, hint: 0 };
   statuses.forEach((s) => { c[s]++; });
-  const errors = c.om + c.mis + c.hint + insertions;
+  const errors = c.om + c.sub + c.mis + c.hint + insertions;
   const n = statuses.length;
   return { ...c, ins: insertions, errors, n, acc: Math.round(Math.max(0, (n - errors) / n) * 1000) / 10 };
 }

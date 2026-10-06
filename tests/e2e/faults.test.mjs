@@ -151,3 +151,71 @@ test('an error report that could not be sent waits on the phone and goes later',
     assert.ok(phoneRows(app).length >= 1, 'sent after the next successful start');
   } finally { await app.close(); }
 });
+
+/** From a page's result to its question, answered with option `choice`; returns ms until feedback. */
+async function answer(app, choice) {
+  await app.page.click('#after-result');
+  await app.screen('question');
+  const t0 = Date.now();
+  await app.page.click(`.option[data-i="${choice}"]`);
+  await app.page.waitForSelector('.next:not([hidden])');
+  return Date.now() - t0;
+}
+
+test('questions: right/wrong shows at once even when the server takes 6 seconds; saved in the background', async () => {
+  const app = await startApp({ timeoutMs: 15000, fault: (r) => (r.action === 'answer' ? { delayMs: 6000 } : null) });
+  try {
+    await toFirstPage(app);
+    await readPage(app);
+    await savedOk(app);
+    const ms = await answer(app, 1);
+    assert.ok(ms < 1000, `feedback after ${ms}ms`);
+    assert.match(await app.page.textContent('.feedback'), /נכון/);
+    await app.page.click('.next');
+    await app.screen('prep');
+    await new Promise((r) => setTimeout(r, 6500));
+    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true }, 'the server has it');
+  } finally { await app.close(); }
+});
+
+test('an answer that never reaches the server is asked again before the summary, nothing breaks', async () => {
+  // Page 1's answer fails every time; the rest work.
+  const app = await startApp({ fault: (r) => (r.action === 'answer' && r.kind === 'page' && r.page === 0 ? { html: 'before' } : null) });
+  try {
+    await toFirstPage(app);
+    for (let i = 0; i < 5; i++) {
+      await app.screen('prep');
+      await readPage(app);
+      await savedOk(app);
+      await answer(app, 1);
+      await app.page.click('.next');
+    }
+    for (let f = 0; f < 3; f++) {
+      await app.screen('question');
+      await app.page.click('.option[data-i="1"]');
+      await app.page.waitForSelector('.next:not([hidden])');
+      await app.page.click('.next');
+    }
+    // finish → too_early → the server's view → page 1's question again
+    await app.screen('question', 30000);
+    assert.match(await app.page.textContent('#q-label'), /עמוד 1/);
+    assert.ok(phoneRows(app).some((r) => /resync/.test(r[2])));
+  } finally { await app.close(); }
+});
+
+test('reading "Natasha" instead of "Mia": marked as another word, one error, kinds listed', async () => {
+  const app = await startApp();
+  try {
+    await toFirstPage(app);
+    await readPage(app, { skip: [3], mis: [], replace: { 0: 'Natasha' } });
+    await savedOk(app);
+    const cls = await app.page.$eval('#result-text .w[data-i="0"]', (e) => e.className);
+    assert.match(cls, /st-sub/);
+    assert.match(await app.page.$eval('#result-text .w[data-i="3"]', (e) => e.className), /st-om/);
+    assert.equal(await app.page.textContent('#result-kinds'), '1 דילוג · 1 מילה אחרת');
+    await app.shot('f4-another-word');
+    const a = app.session().pages[0].best;
+    assert.equal(a.sub, 1);
+    assert.equal(a.errors, 2);
+  } finally { await app.close(); }
+});

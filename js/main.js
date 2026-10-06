@@ -9,6 +9,7 @@ import { alignPage, followPosition, summarize, pageBelow } from './scoring.js';
 import { renderPage, setPosition, markHint, showStatuses, onWordTap } from './reader.js';
 import { renderPrep, renderPractice } from './practice.js';
 import { askQuestion } from './quiz.js';
+import { checkAnswer } from './answers.js';
 import { startReading, loadSdk, setToken } from './speech.js';
 import { speak } from './tts.js';
 import { log, isDebug } from './debug.js';
@@ -319,8 +320,8 @@ async function readingScreen(i, t0 = performance.now()) {
     $('mic-state').className = 'mic';
     $('done-reading').disabled = true;
     const heard = await session.stop();
-    const { statuses, insertions } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
-    log('score', 'aligned', { heard: heard.length, insertions, statuses: statuses.join(',') });
+    const { statuses, insertions, said } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
+    log('score', 'aligned', { heard: heard.length, insertions, said, statuses: statuses.join(',') });
     // The phone counts exactly like the server, so the result shows at once.
     // The server still decides: buttons wait until it has saved and confirmed.
     const attemptsBefore = state.session.pages[i].attempts;
@@ -330,14 +331,14 @@ async function readingScreen(i, t0 = performance.now()) {
     resultScreen(i, {
       attempt: local, errWords, below: localBelow,
       canRetry: localBelow && attemptsBefore + 1 < 2
-    }, statuses);
+    }, statuses, said);
 
     // One id per reading: if the answer is lost on the way, sending again does not count twice.
     const attemptId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const submit = async () => {
       resultSaving('saving');
       try {
-        const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, attemptId });
+        const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, attemptId });
         if (res.expired) return expiredScreen(res.session);
         const p = state.session.pages[i];
         p.attempts = attemptsBefore + 1;
@@ -357,15 +358,16 @@ async function readingScreen(i, t0 = performance.now()) {
 }
 
 /** The page result, shown before the server has answered. */
-function resultScreen(i, res, statuses) {
+function resultScreen(i, res, statuses, said = {}) {
   const st = story();
   const a = res.attempt;
   $('result-score').textContent = `${a.acc}%`;
   $('result-score').className = 'score ' + (res.below ? 'low' : 'high');
   $('result-line').textContent = (res.below ? 'העמוד הזה היה קשה.' : 'כל הכבוד!') +
     ` ${a.errors} טעויות מתוך ${a.n} מילים.` + (res.canRetry ? ' אפשר לקרוא אותו שוב פעם אחת.' : '');
+  $('result-kinds').textContent = errorKinds(a);
   const spans = renderPage($('result-text'), st.pages[i].text);
-  showStatuses(spans, statuses);
+  showStatuses(spans, statuses, said);
   $('result-text').onclick = (e) => {
     const w = e.target.closest('.w');
     if (w) speak(w.textContent, state.child.lang);
@@ -378,6 +380,17 @@ function resultScreen(i, res, statuses) {
 }
 
 let currentPractice = null;
+
+/** "2 דילוגים · 1 מילה אחרת · 3 הגייה": which kinds of errors, so a skip is never a mystery. */
+function errorKinds(a) {
+  return [
+    [a.om, 'דילוג', 'דילוגים'],
+    [a.sub, 'מילה אחרת', 'מילים אחרות'],
+    [a.mis, 'הגייה', 'הגייה'],
+    [a.ins, 'מילה נוספת', 'מילים נוספות'],
+    [a.hint, 'רמז', 'רמזים']
+  ].filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(' · ');
+}
 
 /** Once the server confirmed: the buttons follow its decision. */
 function resultActions(i, res) {
@@ -419,29 +432,56 @@ async function questionScreen(i) {
   updateHeader();
   $('q-label').textContent = `שאלה על עמוד ${i + 1}`;
   show('question');
-  await askQuestion($('q-box'), story().pages[i].question, async (choice) => {
-    const r = await answerCall({ kind: 'page', page: i, choice, extra: state.extra });
+  const q = story().pages[i].question;
+  await askQuestion($('q-box'), q, async (choice) => {
+    const r = await answerNow({ kind: 'page', page: i, choice, extra: state.extra }, 'p' + i, q);
     state.session.pages[i].answered = { choice: r.choice, correct: r.correct };
     return r;
   });
   nextAfterPage(i);
 }
 
-async function answerCall(payload) {
-  try {
-    return await call('answer', payload);
-  } catch (e) {
-    reportError('answer', e, 'question');
-    throw e; // the question shows "try again"
-  }
+/**
+ * The answer is checked on the phone at once (answer key in the story) and saved on the
+ * server in the background, with retries. Without a key (older server) it waits as before.
+ */
+const pendingAnswers = new Set();
+
+function answerNow(payload, qref, q) {
+  const local = checkAnswer(state.session.id, qref, q, payload.choice);
+  const saving = saveAnswer(payload);
+  if (!local) return saving;
+  log('quiz', 'checked on the phone', { qref, ...local });
+  saving.then((r) => {
+    if (r.correct !== local.correct) log('quiz', 'server and phone differ', { server: r, phone: local });
+  }).catch(() => { /* reported in saveAnswer; finish() checks again */ });
+  return Promise.resolve(local);
+}
+
+function saveAnswer(payload) {
+  const p = (async () => {
+    for (let k = 1; ; k++) {
+      try {
+        return await call('answer', payload);
+      } catch (e) {
+        reportError('answer', e, currentScreen);
+        if (OUT_OF_STEP.has(e.code) || k >= 3) throw e;
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  })();
+  pendingAnswers.add(p);
+  p.catch(() => {}).finally(() => pendingAnswers.delete(p));
+  return p;
 }
 
 async function finalScreen(f) {
   updateHeader();
   $('q-label').textContent = `שאלה ${f + 1} מתוך 3 על כל הסיפור`;
   show('question');
-  await askQuestion($('q-box'), story().finalQuestions[f], async (choice) => {
-    const r = await answerCall({ kind: 'final', index: f, choice, extra: state.extra });
+  const q = story().finalQuestions[f];
+  await askQuestion($('q-box'), q, async (choice) => {
+    const r = await answerNow({ kind: 'final', index: f, choice, extra: state.extra }, 'f' + f, q);
     state.session.finalAnswers[f] = { choice: r.choice, correct: r.correct };
     return r;
   });
@@ -453,6 +493,8 @@ async function finalScreen(f) {
 
 async function finish() {
   loading('מסכמים…');
+  // Answers still on their way to the server go first.
+  if (pendingAnswers.size) await Promise.allSettled([...pendingAnswers]);
   try {
     const r = await call('finish', { extra: state.extra });
     state.session.finished = true;
@@ -467,6 +509,8 @@ async function finish() {
       const sess = data && (state.extra ? data.extraSession : data.session);
       if (sess && sess.result) { state.session = sess; return summaryScreen(sess.result, !state.extra && sess.result.passed && state.child.extraAllowed); }
     }
+    // An answer that never reached the server: back to where the server is (it asks again).
+    if (OUT_OF_STEP.has(e.code)) return resync(e, 'finish');
     showError(e, finish, 'finish');
   }
 }

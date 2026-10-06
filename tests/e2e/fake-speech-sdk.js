@@ -1,7 +1,8 @@
 // A stand-in for Microsoft's Speech SDK, for browser tests only.
 // It "reads" the reference text aloud, word by word, following window.__fakeReading:
 //   { skip: [word indexes to leave out], mis: [indexes said badly], perWordMs: 25,
-//     cancelAt: word index where Microsoft drops the connection }
+//     cancelAt: word index where Microsoft drops the connection,
+//     replace: {word index: another word said instead} }
 (function () {
   const RECOGNIZED = 3;
 
@@ -18,9 +19,9 @@
     constructor() { this.timers = []; this.authorizationToken = ''; }
     startContinuousRecognitionAsync(ok) {
       ok();
-      const plan = Object.assign({ skip: [], mis: [], perWordMs: 25 }, window.__fakeReading || {});
+      const plan = Object.assign({ skip: [], mis: [], perWordMs: 25, replace: {} }, window.__fakeReading || {});
       const words = this._ref.split(' ')
-        .map((w, i) => ({ word: w.toLowerCase(), acc: plan.mis.includes(i) ? 20 : 95, i }))
+        .map((w, i) => ({ word: (plan.replace[i] || w).toLowerCase(), acc: plan.mis.includes(i) ? 20 : 95, i }))
         .filter((w) => !plan.skip.includes(w.i));
       let segment = [];
       words.forEach((w, k) => {
