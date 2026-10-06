@@ -5,6 +5,8 @@
 import { normWord, sameWord, looseFlags } from './text.js';
 import { MISPRONOUNCED_BELOW } from './config.js';
 
+const scoreOf = (h) => (h.err === 'Mispronunciation' ? -1 : (typeof h.acc === 'number' ? h.acc : 100));
+
 const FILLERS = new Set(['um', 'uh', 'ah', 'eh', 'hmm', 'mm', 'er', 'erm', 'oh']);
 
 /**
@@ -33,7 +35,12 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
   let i = 0, j = 0;
   while (i < n && j < m) {
     if (sameWord(R[i], H[j], L[i]) && dp[i][j] === dp[i + 1][j + 1] + 1) {
-      const h = heard[j];
+      // Said again right away (a self-correction, not a word the text repeats): the better try counts.
+      let h = heard[j];
+      while (j + 1 < m && sameWord(R[i], H[j + 1], L[i]) && !(i + 1 < n && sameWord(R[i + 1], H[j + 1], L[i + 1]))) {
+        j++;
+        if (scoreOf(heard[j]) > scoreOf(h)) h = heard[j];
+      }
       const bad = h.err === 'Mispronunciation' || (typeof h.acc === 'number' && h.acc < misBelow);
       statuses[i] = bad ? 'mis' : 'ok';
       i++; j++;
@@ -59,6 +66,12 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
 
   hinted.forEach((k) => { if (k >= 0 && k < n) statuses[k] = 'hint'; });
   return { statuses, insertions };
+}
+
+/** Below the bar for one page? Same rule as server/Scoring.gs pageBelowBar. */
+export function pageBelow(summary, child, storyWords) {
+  if (child.passByErrors) return summary.errors > Math.ceil(child.maxErrors * summary.n / Math.max(storyWords, 1));
+  return summary.acc < child.passPercent;
 }
 
 /** Counts like the server does, to show the child a result instantly. */

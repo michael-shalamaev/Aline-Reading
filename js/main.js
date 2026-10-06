@@ -5,7 +5,7 @@ import { VERSION, AUTO_STOP_AFTER_LAST_WORD_MS, MAX_PAGE_MS } from './config.js'
 import { call, hasCode, ApiError, serverNow } from './api.js';
 import { state, story, pageCount, nextStep } from './state.js';
 import { tokenize } from './text.js';
-import { alignPage, followPosition } from './scoring.js';
+import { alignPage, followPosition, summarize, pageBelow } from './scoring.js';
 import { renderPage, setPosition, markHint, showStatuses, onWordTap } from './reader.js';
 import { renderPrep, renderPractice } from './practice.js';
 import { askQuestion } from './quiz.js';
@@ -291,25 +291,40 @@ async function readingScreen(i) {
     const heard = await session.stop();
     const { statuses, insertions } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
     log('score', 'aligned', { heard: heard.length, insertions, statuses: statuses.join(',') });
+    // The phone counts exactly like the server, so the result shows at once.
+    // The server still decides: buttons wait until it has saved and confirmed.
+    const attemptsBefore = state.session.pages[i].attempts;
+    const local = summarize(statuses, insertions);
+    const localBelow = pageBelow(local, state.child, story().wordCount);
+    const errWords = statuses.map((t, k) => ({ w: ref[k], t })).filter((e) => e.t !== 'ok');
+    resultScreen(i, {
+      attempt: local, errWords, below: localBelow,
+      canRetry: localBelow && attemptsBefore + 1 < 2
+    }, statuses);
+
     // One id per reading: if the answer is lost on the way, sending again does not count twice.
     const attemptId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const submit = async () => {
-      loading('בודקים את הקריאה…');
+      resultSaving('saving');
       try {
         const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, attemptId });
         if (res.expired) return expiredScreen(res.session);
         const p = state.session.pages[i];
-        p.attempts += 1;
+        p.attempts = attemptsBefore + 1;
         p.best = res.best;
-        resultScreen(i, res, statuses);
+        if (res.attempt.acc !== local.acc) log('score', 'server and phone differ', { server: res.attempt, phone: local });
+        resultActions(i, res);
+        resultSaving('saved');
       } catch (e) {
-        showError(e, submit); // "try again" resends this same reading, it does not start the page over
+        log('score', 'save failed', String(e && (e.code || e.message)));
+        resultSaving('failed', submit); // resends this same reading, it does not start the page over
       }
     };
     submit();
   }
 }
 
+/** The page result, shown before the server has answered. */
 function resultScreen(i, res, statuses) {
   const st = story();
   const a = res.attempt;
@@ -323,16 +338,40 @@ function resultScreen(i, res, statuses) {
     const w = e.target.closest('.w');
     if (w) speak(w.textContent, state.child.lang);
   };
-  const practice = renderPractice($('practice'), res.errWords, state.child.lang);
-
+  currentPractice = renderPractice($('practice'), res.errWords, state.child.lang);
   $('retry-box').hidden = !res.canRetry;
-  $('retry-btn').onclick = () => { practice.flush(); beginPage(i); };
+  $('retry-btn').disabled = true;
+  $('after-result').disabled = true;
+  show('result');
+}
+
+let currentPractice = null;
+
+/** Once the server confirmed: the buttons follow its decision. */
+function resultActions(i, res) {
+  $('retry-box').hidden = !res.canRetry;
+  $('retry-btn').disabled = false;
+  $('after-result').disabled = false;
+  $('retry-btn').onclick = () => { currentPractice.flush(); beginPage(i); };
   $('after-result').onclick = () => {
-    practice.flush();
+    currentPractice.flush();
     if (state.session.questions) questionScreen(i);
     else nextAfterPage(i);
   };
-  show('result');
+}
+
+function resultSaving(stateName, retry) {
+  const el = $('save-state');
+  el.className = 'save-state ' + stateName;
+  el.textContent = { saving: 'שומרים את התוצאה…', saved: '', failed: 'השמירה לא הצליחה. ' }[stateName];
+  if (stateName === 'failed') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'linkish';
+    b.textContent = 'לנסות שוב';
+    b.onclick = retry;
+    el.appendChild(b);
+  }
 }
 
 function nextAfterPage(i) {

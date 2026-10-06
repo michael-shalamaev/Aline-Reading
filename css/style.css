@@ -207,3 +207,7 @@ section[data-screen=reading] ~ footer { display: none; }
   margin: 0; padding: 12px 16px; border-radius: var(--radius); text-align: center;
   background: var(--good-soft); color: var(--good); font-weight: 700; font-size: 20px;
 }
+
+.save-state { margin: 0; min-height: 1.4em; text-align: center; font-size: 15px; color: var(--muted); }
+.save-state.failed { color: var(--bad); }
+.linkish { border: 0; background: none; color: var(--brand); text-decoration: underline; font-weight: 700; padding: 0; }
