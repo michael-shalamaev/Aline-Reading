@@ -7,6 +7,10 @@ import { MISPRONOUNCED_BELOW } from './config.js';
 
 const scoreOf = (h) => (h.err === 'Mispronunciation' ? -1 : (typeof h.acc === 'number' ? h.acc : 100));
 
+// Microsoft often does not hear a short article in fluent reading ("still as a statue").
+// Such a word missing on its own, between words that were read, is not counted.
+const SWALLOWED = new Set(['a', 'an', 'the']);
+
 const FILLERS = new Set(['um', 'uh', 'ah', 'eh', 'hmm', 'mm', 'er', 'erm', 'oh']);
 
 /**
@@ -82,6 +86,13 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
     s = e;
   }
   const insertions = extra.length - used.size;
+
+  for (let k = 0; k < n; k++) {
+    if (statuses[k] !== 'om' || !SWALLOWED.has(R[k])) continue;
+    const before = k === 0 || statuses[k - 1] !== 'om';
+    const after = k === n - 1 || statuses[k + 1] !== 'om';
+    if (before && after) statuses[k] = 'ok';
+  }
 
   hinted.forEach((k) => { if (k >= 0 && k < n) statuses[k] = 'hint'; });
   return { statuses, insertions, said };

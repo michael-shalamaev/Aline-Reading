@@ -261,11 +261,11 @@ test('a reading sent twice (lost answer, phone retries) counts once', () => {
 
 test('pronunciation sensitivity: in the settings, sent to the page, added to older sheets', () => {
   const s = ready();
-  assert.equal(s.k({ action: 'init' }).data.child.pronThreshold, 60);
+  assert.equal(s.k({ action: 'init' }).data.child.pronThreshold, 55);
   const sh = s.book().getSheetByName('הגדרות');
   sh.data = sh.data.filter((r) => r[0] !== 'pronThreshold');
   s.ctx.setup();
-  assert.ok(sh.rows().some((r) => r[0] === 'pronThreshold' && r[2] === 60));
+  assert.ok(sh.rows().some((r) => r[0] === 'pronThreshold' && r[2] === 55));
 });
 
 /* ---------- speed: how much Google work each request does (see COST_MS in gas-mock) ---------- */

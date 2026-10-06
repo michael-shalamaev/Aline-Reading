@@ -32,7 +32,7 @@ var SETTING_DEFS = [
   { key: 'hintsPerPage', label: 'רמזים לעמוד במהלך הקריאה. 0 מכבה. כל רמז נספר כשגיאה', def: 3, type: 'int' },
   { key: 'windowMinutes', label: 'חלון זמן לסיום הסיפור, בדקות', def: 60, type: 'int' },
   { key: 'regenPerDay', label: 'כמה פעמים אפשר להחליף סיפור לפני תחילת הקריאה', def: 3, type: 'int' },
-  { key: 'pronThreshold', label: 'רגישות הגייה: ציון מיקרוסופט (0-100) שמתחתיו מילה נספרת כשגיאת הגייה. נמוך = סלחני', def: 60, type: 'int' },
+  { key: 'pronThreshold', label: 'רגישות הגייה: ציון מיקרוסופט (0-100) שמתחתיו מילה נספרת כשגיאת הגייה. נמוך = סלחני', def: 55, type: 'int' },
   { key: 'maxWpm', label: 'קצב חשוד: מילים לדקה', def: 160, type: 'int' },
   { key: 'accent', label: 'מבטא: אמריקאי או בריטי', def: 'אמריקאי', type: 'string' },
   { key: 'extraAllowed', label: 'סיפור נוסף אחרי מעבר: כן או לא', def: 'כן', type: 'bool' },

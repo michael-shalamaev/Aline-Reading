@@ -162,3 +162,12 @@ test('answer key: phone and server compute the same, and only the right option m
   }
   assert.equal(checkAnswer('id', 'p0', { options: ['a', 'b'] }, 0), null, 'no key: wait for the server');
 });
+
+test('a lone "a"/"the" Microsoft did not hear is not counted; a skipped line with them is', () => {
+  const ref = tokenize('She stays as still as a statue.');
+  const r = alignPage(ref, heard('she stays as still as statue'));
+  assert.equal(summarize(r.statuses, r.insertions).errors, 0);
+  const ref2 = tokenize('The cat ran to the big tree and sat.');
+  const r2 = alignPage(ref2, heard('the cat ran sat'));
+  assert.deepEqual(r2.statuses.slice(3, 8), ['om', 'om', 'om', 'om', 'om']);
+});

@@ -13,7 +13,7 @@ export const SPEECH_SDK_URLS = [
 
 // A word Microsoft scored below this (0-100) counts as mispronounced, unless the
 // parent set another value in the sheet (pronThreshold).
-export const MISPRONOUNCED_BELOW = 60;
+export const MISPRONOUNCED_BELOW = 55;
 
 // Reading stops by itself this long after the last word was heard (ms).
 export const AUTO_STOP_AFTER_LAST_WORD_MS = 1800;
