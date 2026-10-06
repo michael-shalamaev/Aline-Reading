@@ -169,6 +169,9 @@ export function loadServer(options = {}) {
           if ((options.busyModels || []).includes(model)) return reply(503, '{"error":{"status":"UNAVAILABLE"}}');
           if (geminiFailures > 0) { geminiFailures--; return reply(500, 'boom'); }
           const prompt = JSON.parse(opts.payload).contents[0].parts[0].text;
+          if (options.blockTopic && prompt.includes(options.blockTopic)) {
+            return reply(200, { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } });
+          }
           const story = fakeStory(prompt, options);
           return reply(200, { candidates: [{ content: { parts: [{ text: JSON.stringify(story) }] } }] });
         }

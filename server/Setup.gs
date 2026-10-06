@@ -138,9 +138,12 @@ function selfTest() {
 }
 
 /** Full story generation test, without saving anything. Prints the story. */
+// The topic testStory() tries. Change it here to check a topic a child had trouble with.
+var TEST_TOPIC = 'a friendly dragon who loves pizza';
+
 function testStory() {
   var child = readChildren()[0];
   if (!child) throw new Error('No child configured');
-  var story = generateStory(child, 'a friendly dragon who loves pizza', true);
+  var story = generateStory(child, TEST_TOPIC, true);
   Logger.log(JSON.stringify(story, null, 2));
 }

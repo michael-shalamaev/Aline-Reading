@@ -405,3 +405,69 @@ test('reading time comes from the phone (the server may hear of the start late),
   const bad = s.k({ action: 'submitPage', page: 1, words: words1, insertions: 0, attemptId: 'd2', durSec: 'x' });
   assert.equal(bad.data.attempt.durSec, 30, 'no phone time: the server measures');
 });
+
+test('Gemini refuses the topic itself: a clear "topic_blocked", one request only, logged, no change used', () => {
+  const s = ready({ blockTopic: 'אח ואחות' });
+  const r = s.k({ action: 'newStory', topic: 'על יחסים של אח ואחות' });
+  assert.equal(r.error.code, 'topic_blocked');
+  assert.equal(s.fetches.filter((f) => f.startsWith('model:')).length, 1, 'no other models, no second round');
+  assert.match(s.book().getSheetByName('שגיאות').rows().at(-1)[3], /topic_blocked/);
+  const ok = s.k({ action: 'newStory', topic: 'dragons' });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.data.regenLeft, 3, 'the refused topic did not use a change');
+});
+
+test('the story prompt does not describe the reader beyond what the story needs', () => {
+  const s = ready();
+  const child = s.ctx.readChildren()[0];
+  const p = s.ctx.storyPrompt(child, 'x', true);
+  assert.doesNotMatch(p, /girl|Israel|romance|adult/i);
+});
+
+test('finish fills in answers the phone sends whose own save was lost; a saved answer is never changed', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  story.pages.forEach((p, i) => {
+    s.k({ action: 'startPage', page: i });
+    s.k({ action: 'submitPage', page: i, words: tokenize(p.text).map(() => 'ok'), insertions: 0, attemptId: 'a' + i });
+  });
+  s.k({ action: 'answer', kind: 'page', page: 0, choice: 1 });
+  const r = s.k({ action: 'finish', answers: { pages: [3, 1, 1, 1, 1], final: [1, 0, 1] } });
+  assert.equal(r.ok, true, JSON.stringify(r.error));
+  const sess = s.k({ action: 'init' }).data.session;
+  assert.deepEqual(sess.pages[0].answered, { choice: 1, correct: true }, 'kept the first answer');
+  assert.deepEqual(sess.finalAnswers[1], { choice: 0, correct: false });
+  assert.equal(r.data.result.quizCorrect, 7);
+});
+
+test('finish without all answers still says too_early', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  story.pages.forEach((p, i) => {
+    s.k({ action: 'startPage', page: i });
+    s.k({ action: 'submitPage', page: i, words: tokenize(p.text).map(() => 'ok'), insertions: 0, attemptId: 'a' + i });
+  });
+  const r = s.k({ action: 'finish', answers: { pages: [1, 1, 1, 1, null], final: [1, 1, 1] } });
+  assert.equal(r.error.code, 'too_early');
+});
+
+test('summing up twice gives the same result, without a second mail or log row', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  readAll(s, story);
+  const mails = s.mails.length;
+  const rows = s.book().getSheetByName('יומן').rows().length;
+  const again = s.k({ action: 'finish' });
+  assert.equal(again.ok, true);
+  assert.equal(again.data.again, true);
+  assert.equal(again.data.result.passed, true);
+  assert.equal(s.mails.length, mails);
+  assert.equal(s.book().getSheetByName('יומן').rows().length, rows);
+});
+
+test('every answer names the action it answers', () => {
+  const s = ready();
+  assert.equal(s.k({ action: 'init' }).a, 'init');
+  assert.equal(s.api({ action: 'ping' }).a, 'ping');
+  assert.equal(s.k({ action: 'startPage', page: 0 }).a, 'startPage');
+});

@@ -27,6 +27,8 @@ function doPost(e) {
 }
 
 /**
+ * Every answer names the action it answers (a): Google has been seen to hand back the answer
+ * to an empty request (a ping) instead of ours, and the phone must notice.
  * Every answer carries ms (time spent in this script) and lockMs (of it, waiting for
  * another request to finish), so the page's log can tell slow server from slow network.
  */
@@ -41,12 +43,12 @@ function handle(req) {
     var child = action === 'ping' ? null : authChild(req.k);
     childId = child ? child.id : '';
     var data = fn(child, req);
-    out = { ok: true, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs, data: data };
+    out = { ok: true, a: action, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs, data: data };
   } catch (e) {
     var known = e instanceof AppError;
     if (!known || LOGGED_ERRORS.indexOf(e.code) >= 0) logError(childId, action, e);
     out = {
-      ok: false, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs,
+      ok: false, a: action, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs,
       error: { code: known ? e.code : 'server_error', message: e.message || String(e) }
     };
   }
@@ -56,7 +58,7 @@ function handle(req) {
 }
 
 /** Expected refusals (page_not_allowed, too_early...) are not errors; these are. */
-var LOGGED_ERRORS = ['gemini_error', 'speech_token_error', 'bad_story', 'busy', 'sheet_missing', 'config_missing'];
+var LOGGED_ERRORS = ['gemini_error', 'topic_blocked', 'speech_token_error', 'bad_story', 'busy', 'sheet_missing', 'config_missing'];
 
 /* ---------- actions ---------- */
 
@@ -257,11 +259,27 @@ function actPractice(child, req) {
 function actFinish(child, req) {
   var after = null;
   var out = withLock(function () {
+    // Summing up twice (the first answer got lost on the way) gives the same result again.
+    var done = findSession(child, !!req.extra, true);
+    if (done && done.story && done.state.finished) {
+      return { result: done.state.result, extraAllowed: !done.state.extra && done.state.result.passed && child.extraAllowed, again: true };
+    }
     var sess = loadActive(child, req);
     var s = sess.state;
     if (s.pages.some(function (p) { return p.best < 0; })) fail('too_early', 'Not all pages were read');
     var withQuestions = !s.extra || child.extraQuestions;
     if (withQuestions) {
+      // The phone sends every answer it has with the finish request, so an answer whose own
+      // save got lost on the way is not asked again. An answer already saved is never changed.
+      var given = req.answers || {};
+      s.pages.forEach(function (p, i) {
+        var c = parseInt((given.pages || [])[i], 10);
+        if (!p.answer && c >= 0 && c <= 3) p.answer = { choice: c, correct: c === sess.story.pages[i].question.answer };
+      });
+      s.finalAnswers.forEach(function (a, f) {
+        var c = parseInt((given.final || [])[f], 10);
+        if (!a && c >= 0 && c <= 3) s.finalAnswers[f] = { choice: c, correct: c === sess.story.finalQuestions[f].answer };
+      });
       var missing = s.pages.some(function (p) { return !p.answer; }) ||
         s.finalAnswers.some(function (a) { return !a; });
       if (missing) fail('too_early', 'Not all questions were answered');

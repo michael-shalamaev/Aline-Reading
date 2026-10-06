@@ -46,7 +46,7 @@ function resetProgress(state, pageCount) {
  * Speed: the row number is remembered in the cache, so usually only that one row is read.
  * Without it, only the first four (short) columns of all rows are scanned, never the stories.
  */
-function findSession(child, extra) {
+function findSession(child, extra, includeFinished) {
   var sh = sheet(SHEETS.stories);
   var today = todayStr();
   var cache = CacheService.getScriptCache();
@@ -55,7 +55,7 @@ function findSession(child, extra) {
   var hintRow = parseInt(hint[0], 10);
   if (hintRow >= 2) {
     var row = sh.getRange(hintRow, 1, 1, STORY_COLS.length).getValues()[0];
-    if (String(row[C.id]) === hint[1] && rowMatches(row, child, extra, today)) return sessionFromRow(row, hintRow, extra);
+    if (String(row[C.id]) === hint[1] && rowMatches(row, child, extra, today)) return sessionFromRow(row, hintRow, extra, includeFinished);
   }
 
   var last = sh.getLastRow();
@@ -65,7 +65,7 @@ function findSession(child, extra) {
     if (!rowMatches(keys[i], child, extra, today)) continue;
     var full = sh.getRange(i + 2, 1, 1, STORY_COLS.length).getValues()[0];
     cache.put(key, (i + 2) + '|' + full[C.id], 21600);
-    return sessionFromRow(full, i + 2, extra);
+    return sessionFromRow(full, i + 2, extra, includeFinished);
   }
   return null;
 }
@@ -79,9 +79,9 @@ function rowMatches(r, child, extra, today) {
     (String(r[C.extra]) === 'כן') === !!extra;
 }
 
-function sessionFromRow(r, rowNum, extra) {
+function sessionFromRow(r, rowNum, extra, includeFinished) {
   var state = JSON.parse(r[C.state]);
-  if (extra && state.finished) return null;
+  if (extra && state.finished && !includeFinished) return null;
   return {
     row: rowNum,
     created: r[C.created],

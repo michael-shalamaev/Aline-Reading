@@ -236,8 +236,8 @@ test('questions: right/wrong shows at once even when the server takes 6 seconds;
   } finally { await app.close(); }
 });
 
-test('an answer that never reaches the server is asked again before the summary, nothing breaks', async () => {
-  // Page 1's answer fails every time; the rest work.
+test('an answer whose every save fails goes along with summing up: not asked again, summary shown', async () => {
+  // Page 1's answer fails every time on its own; the rest work.
   const app = await startApp({ fault: (r) => (r.action === 'answer' && r.kind === 'page' && r.page === 0 ? { html: 'before' } : null) });
   try {
     await toFirstPage(app);
@@ -253,10 +253,8 @@ test('an answer that never reaches the server is asked again before the summary,
       await app.page.waitForSelector('.next:not([hidden])');
       await app.page.click('.next');
     }
-    // finish → too_early → the server's view → page 1's question again
-    await app.screen('question', 30000);
-    assert.match(await app.page.textContent('#q-label'), /עמוד 1/);
-    assert.ok(phoneRows(app).some((r) => /resync/.test(r[2])));
+    await app.screen('summary', 40000);
+    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true });
   } finally { await app.close(); }
 });
 
@@ -347,5 +345,47 @@ test('final answers that failed to save are sent again before summing up; the qu
     await app.screen('summary', 40000);
     assert.equal(asked.length, 3);
     assert.ok(app.session().finalAnswers.every((a) => a && a.choice === 1));
+  } finally { await app.close(); }
+});
+
+test('a topic Gemini refuses: back to choosing a topic with a clear message, then another topic works', async () => {
+  const app = await startApp({ serverOpts: { blockTopic: 'אח ואחות' } });
+  try {
+    await app.open();
+    await app.screen('topic');
+    await app.page.fill('#topic', 'על יחסים של אח ואחות');
+    await app.page.click('#make-story');
+    await app.page.waitForFunction(() => /לא הסכים/.test(document.querySelector('#regen-info').textContent));
+    assert.equal(await app.visible(), 'topic');
+    await app.shot('f5-topic-blocked');
+    await app.page.fill('#topic', 'a brother and a sister build a treehouse');
+    await app.page.click('#make-story');
+    await app.screen('preview');
+  } finally { await app.close(); }
+});
+
+test('Google hands back the answer to an empty request (a ping) instead of summing up: retried, summary shows', async () => {
+  const app = await startApp({
+    fault: (r, n) => (r.action === 'finish' && n === 1 ? { replace: () => app.server.api({ action: 'ping' }) } : null)
+  });
+  try {
+    await toFirstPage(app);
+    const k = app.code;
+    const st = app.session().story;
+    st.pages.forEach((pg, i) => {
+      app.server.api({ action: 'startPage', page: i, k });
+      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    });
+    [0, 1].forEach((f) => app.server.api({ action: 'answer', kind: 'final', index: f, choice: 1, k }));
+    await app.open();
+    await app.screen('question');
+    await app.page.click('.option[data-i="1"]');
+    await app.page.waitForSelector('.next:not([hidden])');
+    await app.page.click('.next');
+    await app.screen('summary', 20000);
+    assert.match(await app.page.textContent('#summary-body'), /דיוק/);
+    assert.ok(phoneRows(app).some((r) => /wrong_answer/.test(r[3])), 'reported');
+    assert.deepEqual(app.errors, []);
   } finally { await app.close(); }
 });
