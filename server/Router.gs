@@ -56,7 +56,7 @@ function handle(req) {
 }
 
 /** Expected refusals (page_not_allowed, too_early...) are not errors; these are. */
-var LOGGED_ERRORS = ['gemini_error', 'speech_token_error', 'bad_story', 'busy', 'sheet_missing', 'config_missing'];
+var LOGGED_ERRORS = ['gemini_error', 'topic_blocked', 'speech_token_error', 'bad_story', 'busy', 'sheet_missing', 'config_missing'];
 
 /* ---------- actions ---------- */
 

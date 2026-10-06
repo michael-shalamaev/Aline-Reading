@@ -87,12 +87,12 @@ function storySchema() {
 function storyPrompt(child, topic, withQuestions) {
   var perPage = Math.round(child.words / child.pages);
   return [
-    'Write an original story in English for a 10-year-old girl in Israel who is learning English as a second language.',
-    'She will read it aloud, and speech recognition will check every word.',
+    'Write an original, gentle and friendly children\'s story in English for a young learner of English as a second language.',
+    'The reader will read it aloud, and speech recognition will check every word.',
     '',
-    'Topic chosen by the child: "' + String(topic).slice(0, 120) + '".',
-    'If the topic is not suitable for a 10-year-old (violence, fear, romance, adult themes, real brands or celebrities), ',
-    'write about a close, kind and safe version of it, and set topicAdjusted to true.',
+    'Topic chosen by the reader (it may be written in Hebrew): "' + String(topic).slice(0, 120) + '".',
+    'If the topic does not fit a gentle children\'s story, or names real brands or famous people, ',
+    'write about a close, friendly version of it and set topicAdjusted to true.',
     '',
     'Level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['מתחילים מתקדמים']),
     'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each (total about ' + child.words + ' words).',
@@ -124,7 +124,8 @@ function generateStory(child, topic, withQuestions) {
     } catch (e) {
       lastErr = e;
       logError(child.id, 'generateStory#' + attempt, e);
-      if (e.code === 'gemini_busy') break; // every model already tried; another round would only add waiting
+      // Every model already tried, or Gemini refuses the topic itself: another round would only add waiting.
+      if (e.code === 'gemini_busy' || e.code === 'topic_blocked') break;
     }
   }
   throw lastErr;
@@ -161,6 +162,12 @@ function callGemini(prompt) {
     console.log('gemini', models[i], code, (Date.now() - started) + 'ms');
     if (code === 200) {
       var data = JSON.parse(body);
+      // Gemini's safety filter refused the request itself (it sometimes misreads an innocent
+      // topic). The same request is refused by every model, so the child picks other words.
+      var blocked = (data.promptFeedback && data.promptFeedback.blockReason) ||
+        (data.candidates && data.candidates[0] && /SAFETY|PROHIBITED|BLOCKLIST/.test(data.candidates[0].finishReason || '') &&
+          data.candidates[0].finishReason);
+      if (blocked) fail('topic_blocked', 'Gemini refused the topic: ' + blocked);
       var text = data.candidates && data.candidates[0] && data.candidates[0].content &&
         data.candidates[0].content.parts.map(function (p) { return p.text || ''; }).join('');
       if (!text) fail('gemini_error', models[i] + ' gave an empty answer: ' + body.slice(0, 300));

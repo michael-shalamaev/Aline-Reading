@@ -405,3 +405,21 @@ test('reading time comes from the phone (the server may hear of the start late),
   const bad = s.k({ action: 'submitPage', page: 1, words: words1, insertions: 0, attemptId: 'd2', durSec: 'x' });
   assert.equal(bad.data.attempt.durSec, 30, 'no phone time: the server measures');
 });
+
+test('Gemini refuses the topic itself: a clear "topic_blocked", one request only, logged, no change used', () => {
+  const s = ready({ blockTopic: 'אח ואחות' });
+  const r = s.k({ action: 'newStory', topic: 'על יחסים של אח ואחות' });
+  assert.equal(r.error.code, 'topic_blocked');
+  assert.equal(s.fetches.filter((f) => f.startsWith('model:')).length, 1, 'no other models, no second round');
+  assert.match(s.book().getSheetByName('שגיאות').rows().at(-1)[3], /topic_blocked/);
+  const ok = s.k({ action: 'newStory', topic: 'dragons' });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.data.regenLeft, 3, 'the refused topic did not use a change');
+});
+
+test('the story prompt does not describe the reader beyond what the story needs', () => {
+  const s = ready();
+  const child = s.ctx.readChildren()[0];
+  const p = s.ctx.storyPrompt(child, 'x', true);
+  assert.doesNotMatch(p, /girl|Israel|romance|adult/i);
+});

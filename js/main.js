@@ -45,6 +45,7 @@ const MESSAGES = {
   gemini_error: 'לא הצלחנו לכתוב סיפור כרגע. מנסים שוב בעוד רגע.',
   gemini_busy: 'כותב הסיפורים עמוס כרגע. מחכים דקה ומנסים שוב.',
   bad_story: 'הסיפור יצא לא טוב. מנסים שוב.',
+  topic_blocked: 'על הנושא הזה כותב הסיפורים לא הסכים לכתוב. אפשר לכתוב אותו במילים אחרות או לבחור נושא אחר.',
   speech_token_error: 'בדיקת הקריאה לא זמינה כרגע.',
   speech_sdk_unavailable: 'רכיב זיהוי הדיבור לא נטען. בודקים את החיבור ומנסים שוב.',
   mic: 'צריך לאשר גישה למיקרופון. לוחצים על המנעול ליד הכתובת, מאשרים מיקרופון ומנסים שוב.',
@@ -173,6 +174,12 @@ async function makeStory(topic) {
     state.session = sess && sess.story ? sess : await recoverSession();
     previewScreen();
   } catch (e) {
+    if (e.code === 'topic_blocked') {
+      reportError('newStory', e, 'topic');
+      topicScreen();
+      $('regen-info').textContent = errorText(e);
+      return;
+    }
     if (e.code === 'no_regen_left' || e.code === 'locked') {
       alert(errorText(e));
       return boot();

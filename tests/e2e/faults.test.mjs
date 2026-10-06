@@ -349,3 +349,19 @@ test('final answers that failed to save are sent again before summing up; the qu
     assert.ok(app.session().finalAnswers.every((a) => a && a.choice === 1));
   } finally { await app.close(); }
 });
+
+test('a topic Gemini refuses: back to choosing a topic with a clear message, then another topic works', async () => {
+  const app = await startApp({ serverOpts: { blockTopic: 'אח ואחות' } });
+  try {
+    await app.open();
+    await app.screen('topic');
+    await app.page.fill('#topic', 'על יחסים של אח ואחות');
+    await app.page.click('#make-story');
+    await app.page.waitForFunction(() => /לא הסכים/.test(document.querySelector('#regen-info').textContent));
+    assert.equal(await app.visible(), 'topic');
+    await app.shot('f5-topic-blocked');
+    await app.page.fill('#topic', 'a brother and a sister build a treehouse');
+    await app.page.click('#make-story');
+    await app.screen('preview');
+  } finally { await app.close(); }
+});
