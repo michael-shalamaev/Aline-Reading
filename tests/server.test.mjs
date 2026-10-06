@@ -450,3 +450,17 @@ test('finish without all answers still says too_early', () => {
   const r = s.k({ action: 'finish', answers: { pages: [1, 1, 1, 1, null], final: [1, 1, 1] } });
   assert.equal(r.error.code, 'too_early');
 });
+
+test('summing up twice gives the same result, without a second mail or log row', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  readAll(s, story);
+  const mails = s.mails.length;
+  const rows = s.book().getSheetByName('יומן').rows().length;
+  const again = s.k({ action: 'finish' });
+  assert.equal(again.ok, true);
+  assert.equal(again.data.again, true);
+  assert.equal(again.data.result.passed, true);
+  assert.equal(s.mails.length, mails);
+  assert.equal(s.book().getSheetByName('יומן').rows().length, rows);
+});

@@ -574,10 +574,15 @@ async function finish() {
 function summaryScreen(r, extraAllowed) {
   updateHeader();
   const extraDone = state.extra;
+  if (!r) {
+    // Should not happen; if it does, show the end without numbers rather than an error, and report it.
+    reportError('summary without a result', new Error('session ' + (state.session && state.session.id)), 'summary');
+    r = { passed: true, quizTotal: 0, noNumbers: true };
+  }
   $('summary-title').textContent = extraDone
     ? 'סיימת עוד סיפור! 🌟'
     : (r.passed ? 'עברת! כל הכבוד 🎉' : 'הפעם זה לא הספיק');
-  const lines = [
+  const lines = r.noNumbers ? [] : [
     `דיוק: ${r.acc}% (${r.errors} טעויות מתוך ${r.words} מילים)`,
     r.quizTotal ? `שאלות: ${r.quizCorrect} מתוך ${r.quizTotal} נכונות` : '',
     `זמן קריאה: ${r.readMinutes} דקות`,

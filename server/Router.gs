@@ -257,6 +257,11 @@ function actPractice(child, req) {
 function actFinish(child, req) {
   var after = null;
   var out = withLock(function () {
+    // Summing up twice (the first answer got lost on the way) gives the same result again.
+    var done = findSession(child, !!req.extra, true);
+    if (done && done.story && done.state.finished) {
+      return { result: done.state.result, extraAllowed: !done.state.extra && done.state.result.passed && child.extraAllowed, again: true };
+    }
     var sess = loadActive(child, req);
     var s = sess.state;
     if (s.pages.some(function (p) { return p.best < 0; })) fail('too_early', 'Not all pages were read');
