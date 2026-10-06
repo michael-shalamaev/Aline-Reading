@@ -4,6 +4,8 @@
  * columns C onward = one child each.
  */
 
+var SETTINGS_CACHE_SEC = 600;
+
 var SHEETS = {
   settings: 'הגדרות',
   log: 'יומן',
@@ -39,14 +41,17 @@ var SETTING_DEFS = [
   { key: 'emails', label: 'כתובות למייל הסיכום, מופרדות בפסיק. ריק = בעל הסקריפט', def: '', type: 'string' }
 ];
 
+/** The spreadsheet, opened once per request (opening it is one of the slowest calls). */
 function ss() {
-  var id = prop('SHEET_ID', true);
-  return SpreadsheetApp.openById(id);
+  if (!REQ.book) REQ.book = SpreadsheetApp.openById(prop('SHEET_ID', true));
+  return REQ.book;
 }
 
 function sheet(name) {
+  if (REQ.sheets[name]) return REQ.sheets[name];
   var sh = ss().getSheetByName(name);
   if (!sh) fail('sheet_missing', 'Missing tab: ' + name + '. Run setup().');
+  REQ.sheets[name] = sh;
   return sh;
 }
 
@@ -65,7 +70,7 @@ function parseSetting(def, raw) {
   }
 }
 
-/** All children, keyed by column. Cached for 60 seconds. */
+/** All children, keyed by column. Cached for 10 minutes; setup() clears the cache. */
 function readChildren() {
   var cache = CacheService.getScriptCache();
   var hit = cache.get('children');
@@ -85,7 +90,7 @@ function readChildren() {
     });
     if (child.code) children.push(normalizeChild(child));
   }
-  cache.put('children', JSON.stringify(children), 60);
+  cache.put('children', JSON.stringify(children), SETTINGS_CACHE_SEC);
   return children;
 }
 

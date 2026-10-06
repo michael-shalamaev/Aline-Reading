@@ -3,7 +3,7 @@
  * word tokenizing (must stay identical to js/text.js), errors.
  */
 
-var SERVER_VERSION = '1.0.1';
+var SERVER_VERSION = '1.0.2';
 
 /** Error type the router turns into a clean {ok:false} answer for the page. */
 function AppError(code, message) {
@@ -16,13 +16,25 @@ function fail(code, message) {
   throw new AppError(code, message);
 }
 
+/**
+ * Per-request memory: Apps Script starts every request fresh, but the tests run many
+ * requests in one process, so handle() resets this at the start of each one.
+ */
+var REQ = newReq();
+
+function newReq() {
+  return { t0: Date.now(), lockWaitMs: 0, book: null, sheets: {}, props: {} };
+}
+
 function prop(name, required) {
-  var v = PropertiesService.getScriptProperties().getProperty(name);
+  if (!(name in REQ.props)) REQ.props[name] = PropertiesService.getScriptProperties().getProperty(name);
+  var v = REQ.props[name];
   if (required && !v) fail('config_missing', 'Missing script property: ' + name);
   return v;
 }
 
 function setProp(name, value) {
+  REQ.props[name] = value;
   PropertiesService.getScriptProperties().setProperty(name, value);
 }
 

@@ -5,6 +5,21 @@ import { readFileSync, readdirSync } from 'node:fs';
 import vm from 'node:vm';
 import { randomUUID } from 'node:crypto';
 
+// Every call that costs a round trip to Google in real life is counted here, so tests can
+// check how much work an action does (and how much of it happens while the lock is held).
+// The milliseconds are rough real-world costs, measured from typical Apps Script runs.
+export const COST_MS = { open: 400, read: 150, write: 200, append: 250, fetch: 600, cache: 25, lock: 50, mail: 600, meta: 60 };
+let STATS = null;
+function count(kind, extraMs = 0) {
+  if (!STATS) return;
+  STATS.calls[kind] = (STATS.calls[kind] || 0) + 1;
+  const ms = COST_MS[kind] + extraMs;
+  STATS.ms += ms;
+  if (STATS.locked) STATS.lockedMs += ms;
+}
+// Reading a big range takes longer: about 100 ms more per 20,000 characters.
+const sizeMs = (rows) => Math.round(rows.reduce((n, r) => n + r.reduce((m, x) => m + String(x).length, 0), 0) / 200);
+
 class Range {
   constructor(sheet, row, col, rows = 1, cols = 1) { Object.assign(this, { sheet, row, col, rows, cols }); }
   getValues() {
@@ -14,11 +29,12 @@ class Range {
       for (let c = 0; c < this.cols; c++) line.push(this.sheet.cell(this.row + r, this.col + c));
       out.push(line);
     }
+    count('read', sizeMs(out));
     return out;
   }
-  getValue() { return this.sheet.cell(this.row, this.col); }
-  setValues(v) { v.forEach((line, r) => line.forEach((x, c) => this.sheet.set(this.row + r, this.col + c, x))); return this; }
-  setValue(x) { this.sheet.set(this.row, this.col, x); return this; }
+  getValue() { count('read'); return this.sheet.cell(this.row, this.col); }
+  setValues(v) { count('write'); v.forEach((line, r) => line.forEach((x, c) => this.sheet.set(this.row + r, this.col + c, x))); return this; }
+  setValue(x) { count('write'); this.sheet.set(this.row, this.col, x); return this; }
   setFontWeight() { return this; }
   setBackground() { return this; }
   setFontColor() { return this; }
@@ -36,14 +52,14 @@ class Sheet {
     row[c - 1] = typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x) ? new Date(x + 'T00:00:00+03:00') : x;
   }
   getName() { return this.name; }
-  getLastRow() { return this.data.length; }
+  getLastRow() { count('meta'); return this.data.length; }
   getLastColumn() { return Math.max(0, ...this.data.map((r) => r.length)); }
   getRange(a, b, c, d) {
     if (typeof a === 'string') return new Range(this, 1, 1, Math.max(1, this.data.length), 1);
     return new Range(this, a, b, c || 1, d || 1);
   }
-  getDataRange() { return new Range(this, 1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn())); }
-  appendRow(row) { const r = this.data.length + 1; row.forEach((x, i) => this.set(r, i + 1, x)); return this; }
+  getDataRange() { return new Range(this, 1, 1, Math.max(1, this.data.length), Math.max(1, this.getLastColumn())); }
+  appendRow(row) { count('append'); const r = this.data.length + 1; row.forEach((x, i) => this.set(r, i + 1, x)); return this; }
   setFrozenRows() {} setFrozenColumns() {} setRightToLeft() {} setColumnWidth() {}
   hideSheet() { this.hidden = true; }
   rows() { return this.data; }
@@ -54,7 +70,7 @@ class Book {
   getId() { return this.id; }
   getName() { return this.name; }
   getUrl() { return 'https://docs.google.com/spreadsheets/d/' + this.id; }
-  getSheetByName(n) { return this.sheets.find((s) => s.name === n) || null; }
+  getSheetByName(n) { count('meta'); return this.sheets.find((s) => s.name === n) || null; }
   insertSheet(n, i) { const s = new Sheet(n); this.sheets.splice(i ?? this.sheets.length, 0, s); return s; }
   getSheets() { return this.sheets; }
   deleteSheet(s) { this.sheets = this.sheets.filter((x) => x !== s); }
@@ -106,12 +122,24 @@ export function loadServer(options = {}) {
       setProperty: (k, v) => props.set(k, v)
     }) },
     CacheService: { getScriptCache: () => ({
-      get: (k) => cache.get(k) ?? null, put: (k, v) => cache.set(k, v), remove: (k) => cache.delete(k)
+      get: (k) => {
+        count('cache');
+        const e = cache.get(k);
+        if (!e) return null;
+        if (e.until < clock.now) { cache.delete(k); return null; }
+        return e.v;
+      },
+      put: (k, v, sec = 600) => { count('cache'); cache.set(k, { v, until: clock.now + sec * 1000 }); },
+      remove: (k) => { count('cache'); cache.delete(k); }
     }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({
+      waitLock() { count('lock'); if (STATS) STATS.locked = true; },
+      tryLock() { if (options.lockBusy) return false; count('lock'); if (STATS) STATS.locked = true; return true; },
+      releaseLock() { if (STATS) STATS.locked = false; }
+    }) },
     SpreadsheetApp: {
       create: (n) => { const b = new Book(n); books.set(b.id, b); return b; },
-      openById: (id) => books.get(id)
+      openById: (id) => { count('open'); return books.get(id); }
     },
     Utilities: { getUuid: () => randomUUID(), formatDate: fmtDate },
     Session: { getScriptTimeZone: () => 'Asia/Jerusalem', getEffectiveUser: () => ({ getEmail: () => 'dad@example.com' }) },
@@ -119,9 +147,10 @@ export function loadServer(options = {}) {
       MimeType: { JSON: 'json' },
       createTextOutput: (s) => ({ content: s, setMimeType() { return this; } })
     },
-    MailApp: { sendEmail: (m) => mails.push(m), getRemainingDailyQuota: () => 100 },
+    MailApp: { sendEmail: (m) => { count('mail'); mails.push(m); }, getRemainingDailyQuota: () => 100 },
     UrlFetchApp: {
       fetch(url, opts = {}) {
+        count('fetch');
         fetches.push(url);
         const reply = (code, body) => ({
           getResponseCode: () => code,
@@ -162,6 +191,11 @@ export function loadServer(options = {}) {
   props.set('PAGE_URL', 'https://michael-shalamaev.github.io/Aline-Reading/');
 
   const api = (req) => JSON.parse(ctx.handle(req).content);
+  /** Runs one request and reports what it cost: {res, calls, ms, lockedMs}. */
+  const measure = (req) => {
+    STATS = { calls: {}, ms: 0, lockedMs: 0, locked: false };
+    try { return { res: api(req), ...STATS }; } finally { STATS = null; }
+  };
   const book = () => books.get(props.get('SHEET_ID'));
-  return { ctx, api, props, cache, mails, fetches, clock, book, setNow: (iso) => { clock.now = Date.parse(iso); } };
+  return { ctx, api, measure, props, cache, mails, fetches, clock, book, setNow: (iso) => { clock.now = Date.parse(iso); } };
 }

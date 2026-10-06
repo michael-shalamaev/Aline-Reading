@@ -267,3 +267,101 @@ test('pronunciation sensitivity: in the settings, sent to the page, added to old
   s.ctx.setup();
   assert.ok(sh.rows().some((r) => r[0] === 'pronThreshold' && r[2] === 60));
 });
+
+/* ---------- speed: how much Google work each request does (see COST_MS in gas-mock) ---------- */
+
+function dayWithOldRows(opts) {
+  const s = ready(opts);
+  const tab = s.book().getSheetByName('סיפורים');
+  // Two months of earlier stories, each with a big story text.
+  for (let d = 0; d < 60; d++) {
+    tab.appendRow(['old' + d, 'אלין', '2026-08-01', 'לא', 'עבר', 't', 'T', new Date(), JSON.stringify({ pad: 'x'.repeat(6000) }), '{"finished":true}']);
+  }
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  return { s, story };
+}
+
+test('speed: reading a page opens the sheet once, writes once, never reads old stories', () => {
+  const { s, story } = dayWithOldRows();
+  const words = tokenize(story.pages[0].text).map(() => 'ok');
+  for (const req of [
+    { action: 'startPage', page: 0 },
+    { action: 'submitPage', page: 0, words, insertions: 0, attemptId: 'a1' },
+    { action: 'answer', kind: 'page', page: 0, choice: 1 }
+  ]) {
+    s.clock.now += 30000;
+    const m = s.measure({ k: s.code, ...req });
+    assert.equal(m.res.ok, true, req.action + ' ' + JSON.stringify(m.res.error));
+    assert.equal(m.calls.open, 1, req.action + ': sheet opened once');
+    assert.equal(m.calls.write || 0, 1, req.action + ': one write for the session');
+    assert.ok(m.ms < 1800, `${req.action}: estimated ${m.ms}ms`);
+    assert.ok(m.lockedMs < 1000, `${req.action}: ${m.lockedMs}ms while holding the lock`);
+  }
+});
+
+test('speed: the Microsoft token is fetched outside the lock', () => {
+  const { s } = dayWithOldRows();
+  s.cache.delete('speech_token');
+  const m = s.measure({ k: s.code, action: 'startPage', page: 0 });
+  assert.equal(m.calls.fetch, 1);
+  assert.ok(m.res.data.speech.token);
+  assert.ok(m.lockedMs < 1000, `${m.lockedMs}ms in lock`);
+});
+
+test('speed: settings are read from the sheet at most once in 10 minutes', () => {
+  const s = ready();
+  s.k({ action: 'init' });
+  s.clock.now += 9 * 60000;
+  const m = s.measure({ k: s.code, action: 'init' });
+  assert.equal(m.calls.open, 1, 'only for the session, not for settings');
+});
+
+test('a stale remembered row (parent deleted a row) still finds the right session', () => {
+  const { s, story } = dayWithOldRows();
+  const tab = s.book().getSheetByName('סיפורים');
+  tab.data.splice(5, 1); // a row above today's disappears; today's row moves up
+  const r = s.k({ action: 'startPage', page: 0 });
+  assert.equal(r.ok, true, JSON.stringify(r.error));
+  const init = s.k({ action: 'init' });
+  assert.equal(init.data.session.story.title, story.title);
+  assert.equal(init.data.session.locked, true);
+});
+
+test('every answer says how long the server worked and waited for the lock', () => {
+  const s = ready();
+  s.clock.now += 1;
+  const r = s.k({ action: 'init' });
+  assert.equal(typeof r.ms, 'number');
+  assert.equal(typeof r.lockMs, 'number');
+  const bad = s.k({ action: 'startPage', page: 3 });
+  assert.equal(typeof bad.ms, 'number');
+});
+
+test('lock not free: a clear JSON "busy" answer, logged', () => {
+  const s = ready({ lockBusy: true });
+  const r = s.k({ action: 'init' });
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'busy');
+  assert.match(s.book().getSheetByName('שגיאות').rows().at(-1)[3], /busy/);
+});
+
+test('if writing the log row fails, the attempt is still saved and answered', () => {
+  const { s, story } = dayWithOldRows();
+  s.k({ action: 'startPage', page: 0 });
+  s.ctx.logPageAttempt = () => { throw new Error('sheet hiccup'); };
+  const words = tokenize(story.pages[0].text).map(() => 'ok');
+  const r = s.k({ action: 'submitPage', page: 0, words, insertions: 0, attemptId: 'z' });
+  assert.equal(r.ok, true);
+  assert.equal(s.k({ action: 'init' }).data.session.pages[0].attempts, 1);
+});
+
+test('an error on the phone becomes a row in the errors tab, cut to size', () => {
+  const s = ready();
+  const r = s.k({ action: 'clientError', where: 'startPage', code: 'server_html', message: 'HTTP 200', details: 'x'.repeat(9000) });
+  assert.equal(r.ok, true);
+  const row = s.book().getSheetByName('שגיאות').rows().at(-1);
+  assert.equal(row[2], 'טלפון: startPage');
+  assert.equal(row[3], 'server_html: HTTP 200');
+  assert.equal(row[4].length, 4000);
+  assert.equal(s.api({ action: 'clientError', k: 'bad' }).error.code, 'unauthorized');
+});

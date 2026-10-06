@@ -12,13 +12,17 @@ import { askQuestion } from './quiz.js';
 import { startReading, loadSdk, setToken } from './speech.js';
 import { speak } from './tts.js';
 import { log, isDebug } from './debug.js';
+import { reportError, flushReports } from './report.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /* ---------- screens and messages ---------- */
 
+let currentScreen = '';
+
 function show(name) {
+  currentScreen = name;
   document.querySelectorAll('[data-screen]').forEach((s) => { s.hidden = s.dataset.screen !== name; });
   window.scrollTo(0, 0);
   log('ui', 'screen', name);
@@ -43,7 +47,9 @@ const MESSAGES = {
   speech_token_error: 'בדיקת הקריאה לא זמינה כרגע.',
   speech_sdk_unavailable: 'רכיב זיהוי הדיבור לא נטען. בודקים את החיבור ומנסים שוב.',
   mic: 'צריך לאשר גישה למיקרופון. לוחצים על המנעול ליד הכתובת, מאשרים מיקרופון ומנסים שוב.',
-  rate_limited: 'יותר מדי בקשות. מחכים דקה ומנסים שוב.'
+  rate_limited: 'יותר מדי בקשות. מחכים דקה ומנסים שוב.',
+  server_html: 'השרת של גוגל החזיר שגיאה. מנסים שוב.',
+  busy: 'השרת עסוק. מנסים שוב.'
 };
 
 function errorText(e) {
@@ -52,11 +58,23 @@ function errorText(e) {
   return MESSAGES[code] || ('משהו השתבש. מנסים שוב. (' + code + ')');
 }
 
-function showError(e, retry) {
-  log('ui', 'error', String(e && (e.code || e.message)));
+/** where: what we were doing. Every error screen is logged in full and reported to the sheet. */
+function showError(e, retry, where = '') {
+  log('ui', `error in ${where || '?'}: ${e && (e.code || e.name)}`, String(e && e.message));
+  reportError(where || 'unknown', e, currentScreen);
   $('error-text').textContent = errorText(e);
   $('error-retry').onclick = retry || (() => location.reload());
   show('error');
+}
+
+// The server says the phone is out of step (e.g. a reading was saved but its answer got lost):
+// not an error for the child, just ask the server where we are and continue from there.
+const OUT_OF_STEP = new Set(['page_not_allowed', 'page_not_started', 'too_early', 'no_story']);
+
+function resync(e, where) {
+  log('ui', `out of step in ${where} (${e.code}), asking the server where we are`);
+  reportError(where + ' (resync)', e, currentScreen);
+  return boot();
 }
 
 /* ---------- header: name, progress, time left ---------- */
@@ -102,9 +120,10 @@ async function boot() {
       state.session = data.session;
     }
     loadSdk().catch(() => { /* reported when reading starts */ });
+    flushReports();
     route();
   } catch (e) {
-    showError(e, boot);
+    showError(e, boot, 'init');
   }
 }
 
@@ -157,7 +176,7 @@ async function makeStory(topic) {
       alert(errorText(e));
       return boot();
     }
-    showError(e, () => makeStory(topic));
+    showError(e, () => makeStory(topic), 'newStory');
   }
 }
 
@@ -201,19 +220,24 @@ function prepScreen(i) {
 
 async function beginPage(i) {
   loading('מכינים את המיקרופון…');
+  const t0 = performance.now();
+  let r;
   try {
-    const r = await call('startPage', { page: i, extra: state.extra });
-    if (r.expired) return expiredScreen(r.session);
-    setToken(r.speech);
-    state.session.locked = true;
-    state.session.startedAt = r.startedAt;
-    await readingScreen(i);
+    r = await call('startPage', { page: i, extra: state.extra });
   } catch (e) {
-    showError(e, () => prepScreen(i));
+    if (OUT_OF_STEP.has(e.code)) return resync(e, 'startPage');
+    // Try again from the server's view: an answer lost on the way may have changed it.
+    return showError(e, boot, 'startPage');
   }
+  if (r.expired) return expiredScreen(r.session);
+  if (!r.speech) log('speech', 'no token came with startPage, asking separately');
+  setToken(r.speech);
+  state.session.locked = true;
+  state.session.startedAt = r.startedAt;
+  await readingScreen(i, t0);
 }
 
-async function readingScreen(i) {
+async function readingScreen(i, t0 = performance.now()) {
   updateHeader();
   const st = story();
   const text = st.pages[i].text;
@@ -263,12 +287,18 @@ async function readingScreen(i) {
           autoStop = setTimeout(() => finishPage(), AUTO_STOP_AFTER_LAST_WORD_MS);
         }
       },
-      onProblem: (details) => log('speech', 'problem', details)
+      onProblem: (details) => {
+        // Microsoft stopped listening in the middle (connection, token): say so, do not let her read into nothing.
+        reportError('reading: speech stopped', new Error(String(details)), 'reading');
+        $('mic-state').textContent = 'הבדיקה נקטעה. לוחצים "סיימתי" וקוראים שוב';
+        $('mic-state').className = 'mic';
+      }
     });
   } catch (e) {
     clearTimeout(safety);
-    return showError(e, () => beginPage(i));
+    return showError(e, () => beginPage(i), 'reading: microphone');
   }
+  log('speech', `listening ${Math.round(performance.now() - t0)}ms after "start reading" was pressed`);
   // Only now is anything heard: tell the child clearly that she can start.
   safety = setTimeout(() => finishPage(), MAX_PAGE_MS);
   $('page-text').classList.remove('waiting');
@@ -317,6 +347,8 @@ async function readingScreen(i) {
         resultSaving('saved');
       } catch (e) {
         log('score', 'save failed', String(e && (e.code || e.message)));
+        if (OUT_OF_STEP.has(e.code)) return resync(e, 'submitPage');
+        reportError('submitPage', e, 'result');
         resultSaving('failed', submit); // resends this same reading, it does not start the page over
       }
     };
@@ -388,11 +420,20 @@ async function questionScreen(i) {
   $('q-label').textContent = `שאלה על עמוד ${i + 1}`;
   show('question');
   await askQuestion($('q-box'), story().pages[i].question, async (choice) => {
-    const r = await call('answer', { kind: 'page', page: i, choice, extra: state.extra });
+    const r = await answerCall({ kind: 'page', page: i, choice, extra: state.extra });
     state.session.pages[i].answered = { choice: r.choice, correct: r.correct };
     return r;
   });
   nextAfterPage(i);
+}
+
+async function answerCall(payload) {
+  try {
+    return await call('answer', payload);
+  } catch (e) {
+    reportError('answer', e, 'question');
+    throw e; // the question shows "try again"
+  }
 }
 
 async function finalScreen(f) {
@@ -400,7 +441,7 @@ async function finalScreen(f) {
   $('q-label').textContent = `שאלה ${f + 1} מתוך 3 על כל הסיפור`;
   show('question');
   await askQuestion($('q-box'), story().finalQuestions[f], async (choice) => {
-    const r = await call('answer', { kind: 'final', index: f, choice, extra: state.extra });
+    const r = await answerCall({ kind: 'final', index: f, choice, extra: state.extra });
     state.session.finalAnswers[f] = { choice: r.choice, correct: r.correct };
     return r;
   });
@@ -426,7 +467,7 @@ async function finish() {
       const sess = data && (state.extra ? data.extraSession : data.session);
       if (sess && sess.result) { state.session = sess; return summaryScreen(sess.result, !state.extra && sess.result.passed && state.child.extraAllowed); }
     }
-    showError(e, finish);
+    showError(e, finish, 'finish');
   }
 }
 
@@ -465,6 +506,19 @@ function expiredScreen(sess) {
 /* ---------- go ---------- */
 
 if (isDebug()) document.body.classList.add('debug');
+// Nothing that goes wrong is silent: script errors are logged and reported too.
+window.addEventListener('error', (e) => {
+  log('error', e.message, `${e.filename}:${e.lineno}`);
+  reportError('script error', new Error(`${e.message} at ${e.filename}:${e.lineno}`), currentScreen);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log('error', 'promise', String(e.reason?.stack || e.reason));
+  reportError('unhandled promise', e.reason instanceof Error ? e.reason : new Error(String(e.reason)), currentScreen);
+});
+// A phone that locks its screen or loses signal explains many "network" errors.
+document.addEventListener('visibilitychange', () => log('app', 'page ' + document.visibilityState));
+window.addEventListener('online', () => log('app', 'online'));
+window.addEventListener('offline', () => log('app', 'offline'));
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch((e) => log('app', 'service worker failed', String(e)));
 }
