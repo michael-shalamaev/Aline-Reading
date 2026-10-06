@@ -27,7 +27,7 @@ export function renderPrep(el, words, lang) {
  * Missed words after a page: hear it, try it. Does not change the score.
  * Results are sent to the server when the child moves on.
  */
-export function renderPractice(el, errWords, lang) {
+export function renderPractice(el, errWords, lang, misBelow) {
   const seen = new Set();
   const words = errWords.map((e) => e.w).filter((w) => {
     const k = w.toLowerCase();
@@ -56,7 +56,7 @@ export function renderPractice(el, errWords, lang) {
     btn.disabled = true;
     verdict.textContent = 'מקשיבים…';
     try {
-      const r = await checkWord(word, lang);
+      const r = await checkWord(word, lang, misBelow);
       results.set(word, r.ok || results.get(word) === true);
       verdict.textContent = r.ok ? '✓ מצוין!' : (r.heard ? `✗ שמעתי "${r.heard}". עוד פעם?` : '✗ לא שמעתי. עוד פעם?');
       verdict.className = 'verdict ' + (r.ok ? 'good' : 'bad');

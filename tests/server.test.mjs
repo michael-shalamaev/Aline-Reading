@@ -390,3 +390,18 @@ test('questions reach the phone with a key that checks the answer, never the ans
   assert.equal(q.key, s.ctx.answerKey(sess.id, 'p0', 1)); // the mock story's answer is option 1
   assert.equal(sess.story.finalQuestions[2].key, s.ctx.answerKey(sess.id, 'f2', 1));
 });
+
+test('reading time comes from the phone (the server may hear of the start late), within sane bounds', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  const words = tokenize(story.pages[0].text).map(() => 'ok');
+  s.k({ action: 'startPage', page: 0 });
+  s.clock.now += 5000;
+  const r = s.k({ action: 'submitPage', page: 0, words, insertions: 0, attemptId: 'd1', durSec: 47.5 });
+  assert.equal(r.data.attempt.durSec, 48);
+  s.k({ action: 'startPage', page: 1 });
+  s.clock.now += 30000;
+  const words1 = tokenize(story.pages[1].text).map(() => 'ok');
+  const bad = s.k({ action: 'submitPage', page: 1, words: words1, insertions: 0, attemptId: 'd2', durSec: 'x' });
+  assert.equal(bad.data.attempt.durSec, 30, 'no phone time: the server measures');
+});

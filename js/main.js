@@ -10,7 +10,7 @@ import { renderPage, setPosition, markHint, showStatuses, onWordTap } from './re
 import { renderPrep, renderPractice } from './practice.js';
 import { askQuestion } from './quiz.js';
 import { checkAnswer } from './answers.js';
-import { startReading, loadSdk, setToken } from './speech.js';
+import { startReading, loadSdk, setToken, prefetchToken } from './speech.js';
 import { speak } from './tts.js';
 import { log, isDebug } from './debug.js';
 import { reportError, flushReports } from './report.js';
@@ -215,30 +215,35 @@ function prepScreen(i) {
   const st = story();
   $('prep-label').textContent = `עמוד ${i + 1} מתוך ${st.pages.length}`;
   renderPrep($('prep-words'), st.pages[i].hardWords, state.child.lang);
+  prefetchToken(); // so the microphone does not wait for the server when she presses "start"
+
   $('go-read').onclick = () => beginPage(i);
   show('prep');
 }
 
+/**
+ * "Start reading": the server is told (startPage) and the microphone is started at the
+ * same time. The page opens as soon as the microphone listens; the server's answer is
+ * awaited only before the reading is saved. Google can take 10+ seconds to answer, and
+ * the child should not wait for that.
+ */
 async function beginPage(i) {
-  loading('מכינים את המיקרופון…');
   const t0 = performance.now();
-  let r;
-  try {
-    r = await call('startPage', { page: i, extra: state.extra });
-  } catch (e) {
-    if (OUT_OF_STEP.has(e.code)) return resync(e, 'startPage');
-    // Try again from the server's view: an answer lost on the way may have changed it.
-    return showError(e, boot, 'startPage');
-  }
-  if (r.expired) return expiredScreen(r.session);
-  if (!r.speech) log('speech', 'no token came with startPage, asking separately');
-  setToken(r.speech);
-  state.session.locked = true;
-  state.session.startedAt = r.startedAt;
-  await readingScreen(i, t0);
+  const started = call('startPage', { page: i, extra: state.extra }).then((r) => {
+    log('ui', `server started the page ${Math.round(performance.now() - t0)}ms after the press`);
+    if (!r.expired) {
+      setToken(r.speech);
+      state.session.locked = true;
+      state.session.startedAt = r.startedAt;
+      updateHeader();
+    }
+    return r;
+  });
+  started.catch(() => { /* handled in readingScreen */ });
+  await readingScreen(i, t0, started);
 }
 
-async function readingScreen(i, t0 = performance.now()) {
+async function readingScreen(i, t0, started) {
   updateHeader();
   const st = story();
   const text = st.pages[i].text;
@@ -275,7 +280,23 @@ async function readingScreen(i, t0 = performance.now()) {
     speak(word, state.child.lang);
   });
 
-  let session;
+  let session = null;
+  let listenedAt = 0;
+  // The server refused or could not start the page: stop listening and deal with it.
+  let aborted = false;
+  const abort = async (e, r) => {
+    if (finished || aborted) return;
+    aborted = true;
+    finished = true;
+    clearTimeout(safety);
+    clearTimeout(autoStop);
+    if (session) await session.stop();
+    if (r && r.expired) return expiredScreen(r.session);
+    if (OUT_OF_STEP.has(e.code)) return resync(e, 'startPage');
+    return showError(e, boot, 'startPage');
+  };
+  started.then((r) => { if (r.expired) abort(null, r); }, (e) => abort(e));
+
   try {
     session = await startReading({
       referenceText: ref.join(' '),
@@ -297,9 +318,13 @@ async function readingScreen(i, t0 = performance.now()) {
     });
   } catch (e) {
     clearTimeout(safety);
+    if (aborted) return;
+    finished = true;
     return showError(e, () => beginPage(i), 'reading: microphone');
   }
-  log('speech', `listening ${Math.round(performance.now() - t0)}ms after "start reading" was pressed`);
+  if (aborted) { session.stop(); return; }
+  listenedAt = performance.now();
+  log('speech', `listening ${Math.round(listenedAt - t0)}ms after "start reading" was pressed`);
   // Only now is anything heard: tell the child clearly that she can start.
   safety = setTimeout(() => finishPage(), MAX_PAGE_MS);
   $('page-text').classList.remove('waiting');
@@ -320,6 +345,7 @@ async function readingScreen(i, t0 = performance.now()) {
     $('mic-state').className = 'mic';
     $('done-reading').disabled = true;
     const heard = await session.stop();
+    const durSec = Math.round((performance.now() - listenedAt) / 100) / 10;
     const { statuses, insertions, said } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
     log('score', 'aligned', { heard: heard.length, insertions, said, statuses: statuses.join(',') });
     // The phone counts exactly like the server, so the result shows at once.
@@ -338,7 +364,11 @@ async function readingScreen(i, t0 = performance.now()) {
     const submit = async () => {
       resultSaving('saving');
       try {
-        const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, attemptId });
+        // The page must be started on the server before its reading can be saved.
+        // If that first start never reached it, start it again now (the reading itself is done).
+        const s0 = await started.catch(() => call('startPage', { page: i, extra: state.extra }));
+        if (s0.expired) return expiredScreen(s0.session);
+        const res = await call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, attemptId, durSec });
         if (res.expired) return expiredScreen(res.session);
         const p = state.session.pages[i];
         p.attempts = attemptsBefore + 1;
@@ -372,7 +402,7 @@ function resultScreen(i, res, statuses, said = {}) {
     const w = e.target.closest('.w');
     if (w) speak(w.textContent, state.child.lang);
   };
-  currentPractice = renderPractice($('practice'), res.errWords, state.child.lang);
+  currentPractice = renderPractice($('practice'), res.errWords, state.child.lang, state.child.pronThreshold ?? undefined);
   $('retry-box').hidden = !res.canRetry;
   $('retry-btn').disabled = true;
   $('after-result').disabled = true;

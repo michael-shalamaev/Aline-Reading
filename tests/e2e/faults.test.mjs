@@ -103,19 +103,32 @@ test('answer lost twice, the app is closed and opened again: continues at the qu
   } finally { await app.close(); }
 });
 
-test('microphone: one server request between "start reading" and listening', async () => {
-  const app = await startApp({ fault: (r) => (r.action === 'startPage' ? { delayMs: 1200 } : null) });
+test('microphone: listens at once, without waiting for a slow server; the reading is saved after it answers', async () => {
+  const app = await startApp({ timeoutMs: 15000, fault: (r) => (r.action === 'startPage' ? { delayMs: 5000 } : null) });
   try {
     await toFirstPage(app);
-    const before = app.calls.length;
+    await new Promise((r) => setTimeout(r, 300)); // the token prefetched on this screen
     const t0 = Date.now();
-    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 200 }; });
+    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 20 }; });
     await app.page.click('#go-read');
     await app.page.waitForSelector('#ready-banner:not([hidden])');
     const waited = Date.now() - t0;
-    const between = app.calls.slice(before).map((c) => c.action).filter((a) => a !== 'clientError');
-    assert.deepEqual(between, ['startPage'], 'no separate token request');
-    assert.ok(waited < 2500, `mic ready after ${waited}ms with a 1200ms server`);
+    assert.ok(waited < 1500, `mic ready after ${waited}ms with a 5000ms server`);
+    await app.screen('result');
+    await savedOk(app);
+    assert.equal(attemptsOf(app, 0), 1);
+    assert.ok(app.session().pages[0].best.durSec >= 1, 'duration measured on the phone');
+  } finally { await app.close(); }
+});
+
+test('the server cannot start the page while she already reads: listening stops, error screen, nothing saved', async () => {
+  const app = await startApp({ fault: (r) => (r.action === 'startPage' ? { delayMs: 400, html: 'before' } : null) });
+  try {
+    await toFirstPage(app);
+    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 300 }; });
+    await app.page.click('#go-read');
+    await app.screen('error');
+    assert.equal(attemptsOf(app, 0), 0);
   } finally { await app.close(); }
 });
 

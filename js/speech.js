@@ -42,13 +42,26 @@ export function setToken(t) {
   if (t && t.token) token = { token: t.token, region: t.region, expiresAt: Date.now() + t.ttlSec * 1000 };
 }
 
+/** Fetches a token in the background if the one we have will not last for a page. */
+export function prefetchToken() {
+  if (token && token.expiresAt - Date.now() > 4 * 60000) return;
+  getToken().catch((e) => log('speech', 'token prefetch failed', String(e)));
+}
+
 /** A valid token, fetched again when less than 90 seconds are left. */
+let tokenRequest = null;
+
 async function getToken() {
   if (token && token.expiresAt - Date.now() > 90000) return token;
-  const t = await call('speechToken');
-  token = { token: t.token, region: t.region, expiresAt: Date.now() + t.ttlSec * 1000 };
-  log('speech', 'token ok, seconds left', t.ttlSec);
-  return token;
+  // One request at a time: a prefetch already on its way is shared, not repeated.
+  if (!tokenRequest) {
+    tokenRequest = call('speechToken').then((t) => {
+      token = { token: t.token, region: t.region, expiresAt: Date.now() + t.ttlSec * 1000 };
+      log('speech', 'token ok, seconds left', t.ttlSec);
+      return token;
+    }).finally(() => { tokenRequest = null; });
+  }
+  return tokenRequest;
 }
 
 function makeConfig(SDK, t, lang) {
@@ -153,7 +166,7 @@ export async function startReading({ referenceText, lang, onProgress, onProblem 
 }
 
 /** One word, said once: {ok, heard, acc}. Used in the practice after each page. */
-export async function checkWord(word, lang) {
+export async function checkWord(word, lang, misBelow = MISPRONOUNCED_BELOW) {
   const SDK = await loadSdk();
   const t = await getToken();
   const rec = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), SDK.AudioConfig.fromDefaultMicrophoneInput());
@@ -162,7 +175,7 @@ export async function checkWord(word, lang) {
     const result = await new Promise((resolve, reject) => rec.recognizeOnceAsync(resolve, reject));
     if (result.reason !== SDK.ResultReason.RecognizedSpeech) return { ok: false, heard: '', acc: 0 };
     const w = wordsOf(SDK, result)[0] || { word: '', acc: 0, err: 'None' };
-    const ok = sameWord(normWord(word), normWord(w.word), /^[A-Z]/.test(word)) && w.err !== 'Mispronunciation' && w.acc >= MISPRONOUNCED_BELOW;
+    const ok = sameWord(normWord(word), normWord(w.word), /^[A-Z]/.test(word)) && w.acc >= misBelow;
     log('speech', 'word check', { word, heard: w.word, acc: w.acc, ok });
     return { ok, heard: w.word, acc: w.acc };
   } finally {
