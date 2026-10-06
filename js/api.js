@@ -54,7 +54,7 @@ export function hasCode() {
 // Safe to send twice: the server recognises a repeat (attemptId, first answer wins) or only reads.
 const RETRY_SAFE = new Set(['init', 'speechToken', 'startPage', 'submitPage', 'answer', 'finish']);
 // Worth one more try: no answer, Google's own error page instead of ours, or the lock was busy.
-const RETRY_ON = new Set(['timeout', 'network', 'server_html', 'busy']);
+const RETRY_ON = new Set(['timeout', 'network', 'server_html', 'busy', 'wrong_answer']);
 const RETRY_DELAY_MS = 1500;
 
 // Calls that change the day's progress go out one at a time, in the order they were made
@@ -132,6 +132,12 @@ export async function callOnce(action, payload = {}) {
   }
 
   const ms = took();
+  // Google sometimes returns the answer to an empty request (a ping) instead of ours.
+  if (json.a && json.a !== action) {
+    const detail = `asked ${action}, got the answer to ${json.a} after ${ms}ms: ${JSON.stringify(json.data || json.error).slice(0, 120)}`;
+    log('api', `✗ ${action} wrong answer`, detail);
+    throw new ApiError('wrong_answer', detail);
+  }
   if (json.t && (ms < bestRtt || Date.now() - bestAt > 10 * 60000)) {
     clockOffset = Math.round(json.t - Date.now() + ms / 2);
     bestRtt = ms;

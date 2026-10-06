@@ -51,6 +51,7 @@ const MESSAGES = {
   mic: 'צריך לאשר גישה למיקרופון. לוחצים על המנעול ליד הכתובת, מאשרים מיקרופון ומנסים שוב.',
   rate_limited: 'יותר מדי בקשות. מחכים דקה ומנסים שוב.',
   server_html: 'השרת של גוגל החזיר שגיאה. מנסים שוב.',
+  wrong_answer: 'השרת של גוגל החזיר תשובה לא נכונה. מנסים שוב.',
   busy: 'השרת עסוק. מנסים שוב.'
 };
 
@@ -174,6 +175,13 @@ async function makeStory(topic) {
     state.session = sess && sess.story ? sess : await recoverSession();
     previewScreen();
   } catch (e) {
+    // The story may have been written and saved even though its answer got lost on the way.
+    if (e.code === 'wrong_answer' || e.code === 'timeout' || e.code === 'server_html') {
+      try {
+        state.session = await recoverSession();
+        return previewScreen();
+      } catch { /* no story was saved: show the error */ }
+    }
     if (e.code === 'topic_blocked') {
       reportError('newStory', e, 'topic');
       topicScreen();

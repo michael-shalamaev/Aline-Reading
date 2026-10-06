@@ -464,3 +464,10 @@ test('summing up twice gives the same result, without a second mail or log row',
   assert.equal(s.mails.length, mails);
   assert.equal(s.book().getSheetByName('יומן').rows().length, rows);
 });
+
+test('every answer names the action it answers', () => {
+  const s = ready();
+  assert.equal(s.k({ action: 'init' }).a, 'init');
+  assert.equal(s.api({ action: 'ping' }).a, 'ping');
+  assert.equal(s.k({ action: 'startPage', page: 0 }).a, 'startPage');
+});

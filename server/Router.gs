@@ -27,6 +27,8 @@ function doPost(e) {
 }
 
 /**
+ * Every answer names the action it answers (a): Google has been seen to hand back the answer
+ * to an empty request (a ping) instead of ours, and the phone must notice.
  * Every answer carries ms (time spent in this script) and lockMs (of it, waiting for
  * another request to finish), so the page's log can tell slow server from slow network.
  */
@@ -41,12 +43,12 @@ function handle(req) {
     var child = action === 'ping' ? null : authChild(req.k);
     childId = child ? child.id : '';
     var data = fn(child, req);
-    out = { ok: true, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs, data: data };
+    out = { ok: true, a: action, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs, data: data };
   } catch (e) {
     var known = e instanceof AppError;
     if (!known || LOGGED_ERRORS.indexOf(e.code) >= 0) logError(childId, action, e);
     out = {
-      ok: false, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs,
+      ok: false, a: action, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs,
       error: { code: known ? e.code : 'server_error', message: e.message || String(e) }
     };
   }
