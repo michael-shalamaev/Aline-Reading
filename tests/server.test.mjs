@@ -261,9 +261,9 @@ test('a reading sent twice (lost answer, phone retries) counts once', () => {
 
 test('pronunciation sensitivity: in the settings, sent to the page, added to older sheets', () => {
   const s = ready();
-  assert.equal(s.k({ action: 'init' }).data.child.pronThreshold, 40);
+  assert.equal(s.k({ action: 'init' }).data.child.pronThreshold, 60);
   const sh = s.book().getSheetByName('הגדרות');
   sh.data = sh.data.filter((r) => r[0] !== 'pronThreshold');
   s.ctx.setup();
-  assert.ok(sh.rows().some((r) => r[0] === 'pronThreshold' && r[2] === 40));
+  assert.ok(sh.rows().some((r) => r[0] === 'pronThreshold' && r[2] === 60));
 });
