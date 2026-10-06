@@ -220,14 +220,21 @@ function validateStory(s, child) {
 }
 
 /** The story as the page may see it: no correct answers. */
-function publicStory(story) {
+/** The story as the phone sees it: questions carry an answer key, never the answer. */
+function publicStory(story, sessId) {
   if (!story) return null;
   return {
     title: story.title,
     wordCount: story.wordCount,
-    pages: story.pages.map(function (p) {
-      return { text: p.text, hardWords: p.hardWords, question: { q: p.question.q, options: p.question.options } };
+    pages: story.pages.map(function (p, i) {
+      return {
+        text: p.text,
+        hardWords: p.hardWords,
+        question: { q: p.question.q, options: p.question.options, key: answerKey(sessId, 'p' + i, p.question.answer) }
+      };
     }),
-    finalQuestions: story.finalQuestions.map(function (q) { return { q: q.q, options: q.options }; })
+    finalQuestions: story.finalQuestions.map(function (q, f) {
+      return { q: q.q, options: q.options, key: answerKey(sessId, 'f' + f, q.answer) };
+    })
   };
 }

@@ -3,7 +3,7 @@
  * word tokenizing (must stay identical to js/text.js), errors.
  */
 
-var SERVER_VERSION = '1.0.2';
+var SERVER_VERSION = '1.0.3';
 
 /** Error type the router turns into a clean {ok:false} answer for the page. */
 function AppError(code, message) {
@@ -81,4 +81,20 @@ function tokenize(text) {
 /** Lower-case, straight apostrophes removed: the form used for comparing words. */
 function normWord(w) {
   return String(w || '').toLowerCase().replace(/['’]/g, '');
+}
+
+/**
+ * Answer key for instant feedback on the phone. KEEP IN SYNC with js/answers.js.
+ * A short FNV-1a hash of session id, question and the correct option: the phone can
+ * check a choice without the answer being written out in plain sight. It hides the
+ * answer from a child, not from someone who knows programming.
+ */
+function answerKey(sessId, qref, answer) {
+  var str = sessId + '|' + qref + '|' + answer;
+  var h = 0x811c9dc5;
+  for (var i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ('0000000' + h.toString(16)).slice(-8);
 }

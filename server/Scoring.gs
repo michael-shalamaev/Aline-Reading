@@ -4,7 +4,7 @@
  * rules and keeps the best attempt. Durations are measured here, not on the phone.
  */
 
-var WORD_STATUS = { ok: 1, om: 1, mis: 1, hint: 1 };
+var WORD_STATUS = { ok: 1, om: 1, sub: 1, mis: 1, hint: 1 };
 var MAX_ATTEMPTS = 2;
 
 function scoreAttempt(pageText, payload, durSec) {
@@ -13,29 +13,32 @@ function scoreAttempt(pageText, payload, durSec) {
   if (statuses.length !== ref.length) {
     fail('bad_payload', 'Expected ' + ref.length + ' word results, got ' + statuses.length);
   }
-  var count = { ok: 0, om: 0, mis: 0, hint: 0 };
+  var count = { ok: 0, om: 0, sub: 0, mis: 0, hint: 0 };
   var errWords = [];
+  var said = payload.said || {};
   statuses.forEach(function (st, i) {
     if (!WORD_STATUS[st]) st = 'om';
     count[st]++;
-    if (st !== 'ok') errWords.push({ w: ref[i], t: st });
+    if (st === 'sub') errWords.push({ w: ref[i], t: st, said: String(said[i] || '').slice(0, 40) });
+    else if (st !== 'ok') errWords.push({ w: ref[i], t: st });
   });
   var ins = Math.max(0, Math.min(ref.length, parseInt(payload.insertions, 10) || 0));
   var n = ref.length;
-  var errors = count.om + count.mis + count.hint + ins;
+  var errors = count.om + count.sub + count.mis + count.hint + ins;
   var minutes = Math.max(durSec, 1) / 60;
   return {
     at: Date.now(),
     n: n,
     ok: count.ok,
     om: count.om,
+    sub: count.sub,
     mis: count.mis,
     hint: count.hint,
     ins: ins,
     errors: errors,
     acc: round1(Math.max(0, (n - errors) / n * 100)),
     durSec: Math.round(durSec),
-    wpm: Math.round((count.ok + count.mis) / minutes),
+    wpm: Math.round((count.ok + count.mis + count.sub) / minutes),
     errWords: errWords
   };
 }
@@ -59,18 +62,18 @@ function bestIndex(attempts) {
 
 function summaryOfAttempt(a) {
   if (!a) return null;
-  return { n: a.n, acc: a.acc, errors: a.errors, om: a.om, mis: a.mis, hint: a.hint, ins: a.ins, wpm: a.wpm, durSec: a.durSec };
+  return { n: a.n, acc: a.acc, errors: a.errors, om: a.om, sub: a.sub || 0, mis: a.mis, hint: a.hint, ins: a.ins, wpm: a.wpm, durSec: a.durSec };
 }
 
 /** Totals over the best attempt of every page, and the pass decision. */
 function finalResult(child, sess) {
   var s = sess.state;
   var story = sess.story;
-  var t = { n: 0, errors: 0, om: 0, mis: 0, hint: 0, ins: 0, durSec: 0, attempts: 0 };
+  var t = { n: 0, errors: 0, om: 0, sub: 0, mis: 0, hint: 0, ins: 0, durSec: 0, attempts: 0 };
   var fastPages = [];
   s.pages.forEach(function (p, i) {
     var a = p.attempts[p.best];
-    t.n += a.n; t.errors += a.errors; t.om += a.om; t.mis += a.mis;
+    t.n += a.n; t.errors += a.errors; t.om += a.om; t.sub += a.sub || 0; t.mis += a.mis;
     t.hint += a.hint; t.ins += a.ins; t.durSec += a.durSec;
     t.attempts += p.attempts.length;
     if (a.wpm > child.maxWpm) fastPages.push(i + 1);
@@ -99,6 +102,7 @@ function finalResult(child, sess) {
     words: t.n,
     errors: t.errors,
     om: t.om,
+    sub: t.sub,
     mis: t.mis,
     hint: t.hint,
     ins: t.ins,

@@ -150,7 +150,7 @@ function publicSession(sess, child) {
     id: s.id,
     extra: s.extra,
     questions: !s.extra || child.extraQuestions,
-    story: publicStory(sess.story),
+    story: publicStory(sess.story, s.id),
     regenLeft: Math.max(0, child.regenPerDay - s.regenUsed),
     locked: !!s.startedAt,
     startedAt: s.startedAt,

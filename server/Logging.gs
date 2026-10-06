@@ -10,22 +10,23 @@
 function headersFor(name) {
   var h = {};
   h[SHEETS.log] = ['תאריך', 'ילד', 'סיפור נוסף', 'נושא', 'כותרת', 'מילים', 'עמודים', 'התחלה', 'סיום', 'דקות כולל', 'דקות קריאה',
-    'דיוק %', 'שגיאות', 'הושמטו', 'הגייה', 'נוספו', 'רמזים', 'מילים לדקה', 'ניסיונות', 'שאלות נכונות', 'עבר', 'הערות', 'מזהה'];
+    'דיוק %', 'שגיאות', 'הושמטו', 'הגייה', 'נוספו', 'רמזים', 'מילים לדקה', 'ניסיונות', 'שאלות נכונות', 'עבר', 'הערות', 'מזהה', 'מילה אחרת'];
   h[SHEETS.pages] = ['זמן', 'ילד', 'מזהה', 'עמוד', 'ניסיון', 'מילים', 'דיוק %', 'שגיאות', 'הושמטו', 'הגייה', 'נוספו', 'רמזים',
-    'שניות', 'מילים לדקה', 'מתחת לסף', 'מילים שגויות'];
+    'שניות', 'מילים לדקה', 'מתחת לסף', 'מילים שגויות', 'מילה אחרת'];
   h[SHEETS.words] = ['ילד', 'מילה', 'שגיאות', 'מתוכן רמזים', 'פעם אחרונה', 'תרגול מוצלח', 'תרגול לא מוצלח', 'תרגול אחרון'];
   h[SHEETS.stories] = STORY_COLS;
   h[SHEETS.errors] = ['זמן', 'ילד', 'פעולה', 'הודעה', 'פרטים'];
   return h[name];
 }
 
-var TYPE_HE = { om: 'הושמטה', mis: 'הגייה', hint: 'רמז' };
+var TYPE_HE = { om: 'הושמטה', sub: 'מילה אחרת', mis: 'הגייה', hint: 'רמז' };
 
 function logPageAttempt(child, sess, pageIdx, attemptNo, a, below) {
   sheet(SHEETS.pages).appendRow([
     new Date(), child.id, sess.state.id, pageIdx + 1, attemptNo, a.n, a.acc, a.errors, a.om, a.mis, a.ins, a.hint,
     a.durSec, a.wpm, below ? 'כן' : 'לא',
-    a.errWords.map(function (e) { return e.w + ' (' + TYPE_HE[e.t] + ')'; }).join(', ')
+    a.errWords.map(function (e) { return e.w + ' (' + TYPE_HE[e.t] + (e.said ? ': ' + e.said : '') + ')'; }).join(', '),
+    a.sub || 0
   ]);
 }
 
@@ -35,7 +36,7 @@ function logSession(child, sess, r) {
     s.date, child.id, s.extra ? 'כן' : 'לא', s.topics[s.topics.length - 1] || '', sess.story.title,
     r.words, s.pages.length, fmtTime(s.startedAt), fmtTime(Date.now()), r.minutes, r.readMinutes,
     r.acc, r.errors, r.om, r.mis, r.ins, r.hint, r.wpm, r.attempts,
-    r.quizTotal ? r.quizCorrect + '/' + r.quizTotal : '', r.passed ? 'כן' : 'לא', r.flags.join('; '), s.id
+    r.quizTotal ? r.quizCorrect + '/' + r.quizTotal : '', r.passed ? 'כן' : 'לא', r.flags.join('; '), s.id, r.sub || 0
   ]);
 }
 

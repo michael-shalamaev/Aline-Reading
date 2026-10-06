@@ -31,7 +31,7 @@ function sendSummaryMail(child, sess, r) {
     ['כותרת', sess.story.title],
     ['תוצאה', verdict + (r.readingPassed && !r.quizPassed ? ' (בגלל שאלות ההבנה)' : '')],
     ['דיוק', r.acc + '% · ' + r.errors + ' שגיאות מתוך ' + r.words + ' מילים'],
-    ['פירוט', 'הושמטו ' + r.om + ' · הגייה ' + r.mis + ' · נוספו ' + r.ins + ' · רמזים ' + r.hint],
+    ['פירוט', 'הושמטו ' + r.om + ' · מילה אחרת ' + (r.sub || 0) + ' · הגייה ' + r.mis + ' · נוספו ' + r.ins + ' · רמזים ' + r.hint],
     ['זמן', fmtTime(s.startedAt) + ' עד ' + fmtTime(Date.now()) + ' · ' + r.minutes + ' דקות, מתוכן ' + r.readMinutes + ' קריאה'],
     ['קצב', r.wpm + ' מילים לדקה'],
     ['קריאות חוזרות', String(r.attempts - s.pages.length)],

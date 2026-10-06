@@ -25,10 +25,16 @@ export function markHint(spans, i) {
 }
 
 /** After the page: green for read, red for skipped or mispronounced, amber for hints. */
-export function showStatuses(spans, statuses) {
+const STATUS_HE = { om: 'דילגת על המילה', mis: 'הגייה', hint: 'רמז' };
+
+/** Colours each word by its result; a word said instead shows what was said. */
+export function showStatuses(spans, statuses, said = {}) {
   spans.forEach((s, i) => {
+    const st = statuses[i] || 'ok';
     s.classList.remove('read', 'current');
-    s.classList.add('st-' + (statuses[i] || 'ok'));
+    s.classList.add('st-' + st);
+    if (st === 'sub') s.title = 'נאמר: ' + said[i];
+    else if (STATUS_HE[st]) s.title = STATUS_HE[st];
   });
 }
 
