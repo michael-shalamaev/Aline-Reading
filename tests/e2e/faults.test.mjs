@@ -389,3 +389,16 @@ test('Google hands back the answer to an empty request (a ping) instead of summi
     assert.deepEqual(app.errors, []);
   } finally { await app.close(); }
 });
+
+test('reading a phrase again is no error; words not in the text are listed under the result', async () => {
+  const app = await startApp();
+  try {
+    await toFirstPage(app);
+    // After word 7 she goes back and reads words 4-7 again, and later says two words that are not in the text.
+    const ref = tokenize(app.session().story.pages[0].text).map((w) => w.toLowerCase());
+    await readPage(app, { skip: [], mis: [], insert: { 7: ref.slice(4, 8), 20: ['banana', 'robot'] } });
+    assert.equal(await app.page.textContent('#result-kinds'), '2 מילים נוספות');
+    assert.match(await app.page.textContent('#result-extra'), /banana, robot/);
+    await app.shot('f6-extra-words');
+  } finally { await app.close(); }
+});

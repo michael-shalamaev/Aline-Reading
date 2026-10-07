@@ -39,7 +39,8 @@ function scoreAttempt(pageText, payload, durSec) {
     acc: round1(Math.max(0, (n - errors) / n * 100)),
     durSec: Math.round(durSec),
     wpm: Math.round((count.ok + count.mis + count.sub) / minutes),
-    errWords: errWords
+    errWords: errWords,
+    extraWords: (payload.extraWords || []).slice(0, 40).map(function (w) { return String(w).slice(0, 30); })
   };
 }
 
