@@ -25,7 +25,8 @@ function logPageAttempt(child, sess, pageIdx, attemptNo, a, below) {
   sheet(SHEETS.pages).appendRow([
     new Date(), child.id, sess.state.id, pageIdx + 1, attemptNo, a.n, a.acc, a.errors, a.om, a.mis, a.ins, a.hint,
     a.durSec, a.wpm, below ? 'כן' : 'לא',
-    a.errWords.map(function (e) { return e.w + ' (' + TYPE_HE[e.t] + (e.said ? ': ' + e.said : '') + ')'; }).join(', '),
+    a.errWords.map(function (e) { return e.w + ' (' + TYPE_HE[e.t] + (e.said ? ': ' + e.said : '') + ')'; }).join(', ') +
+      (a.extraWords && a.extraWords.length ? ' | נוספו: ' + a.extraWords.join(', ') : ''),
     a.sub || 0
   ]);
 }

@@ -20,7 +20,7 @@ const FILLERS = new Set(['um', 'uh', 'ah', 'eh', 'hmm', 'mm', 'er', 'erm', 'oh']
  * @param {{word:string, acc:number, err:string}[]} heard  words from Microsoft, in order
  * @param {Set<number>} hinted  indexes of words the child asked to hear
  * @param {number} misBelow  Microsoft score under which a word counts as mispronounced
- * @returns {{statuses:string[], insertions:number, said:Object<number,string>}}
+ * @returns {{statuses:string[], insertions:number, said:Object<number,string>, extraWords:string[]}}
  *   status: ok | om (skipped) | sub (another word said instead) | mis (pronunciation) | hint;
  *   said: for each sub, the word that was said
  */
@@ -61,13 +61,17 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
   }
   while (j < m) unmatchedHeard.push({ j: j++, near: n });
 
-  // Extra words: fillers and a child repeating a neighbouring word while correcting
-  // herself ("the... the cat") are ignored.
+  // Extra words: fillers are ignored, and so is going back to read a few words again
+  // ("the little creature... the little creature through"), or a hint word said after
+  // hearing it: a word of the text close behind (or just ahead of) the place is no error.
+  const REREAD_BACK = 15, REREAD_AHEAD = 2;
   const extra = unmatchedHeard.filter((u) => {
     const w = H[u.j];
     if (!w || FILLERS.has(w)) return false;
-    const neighbours = [R[u.near - 1], R[u.near], R[u.near + 1]];
-    return !neighbours.some((r) => r && sameWord(r, w));
+    for (let k = Math.max(0, u.near - REREAD_BACK); k <= Math.min(n - 1, u.near + REREAD_AHEAD); k++) {
+      if (sameWord(R[k], w, L[k])) return false;
+    }
+    return true;
   });
 
   // Another word said in place of a page word ("Natasha" for "Maya"): in a run of
@@ -87,7 +91,8 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
     }
     s = e;
   }
-  const insertions = extra.length - used.size;
+  const extraWords = extra.filter((u) => !used.has(u)).map((u) => heard[u.j].word);
+  const insertions = extraWords.length;
 
   for (let k = 0; k < n; k++) {
     if (statuses[k] !== 'om' || !SWALLOWED.has(R[k])) continue;
@@ -97,7 +102,7 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
   }
 
   hinted.forEach((k) => { if (k >= 0 && k < n) statuses[k] = 'hint'; });
-  return { statuses, insertions, said };
+  return { statuses, insertions, said, extraWords };
 }
 
 /** Below the bar for one page? Same rule as server/Scoring.gs pageBelowBar. */

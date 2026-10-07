@@ -361,8 +361,8 @@ async function readingScreen(i, t0, started) {
     $('done-reading').disabled = true;
     const heard = await session.stop();
     const durSec = Math.round((performance.now() - listenedAt) / 100) / 10;
-    const { statuses, insertions, said } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
-    log('score', 'aligned', { heard: heard.length, insertions, said, statuses: statuses.join(',') });
+    const { statuses, insertions, said, extraWords } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
+    log('score', 'aligned', { heard: heard.length, insertions, said, extraWords, statuses: statuses.join(',') });
     // The phone counts exactly like the server (same rules, tested), so the result and the
     // buttons are there at once; the reading is saved in the background, in order, with retries.
     const p = state.session.pages[i];
@@ -373,7 +373,7 @@ async function readingScreen(i, t0, started) {
     const shown = { attempt: local, errWords, below: localBelow, canRetry: localBelow && attemptsBefore + 1 < 2 };
     p.attempts = attemptsBefore + 1;
     if (!p.best || local.acc > p.best.acc) p.best = local;
-    resultScreen(i, shown, statuses, said);
+    resultScreen(i, shown, statuses, said, extraWords);
     resultActions(i, shown);
 
     // One id per reading: if the answer is lost on the way, sending again does not count twice.
@@ -383,7 +383,7 @@ async function readingScreen(i, t0, started) {
       // If that first start never reached it, start it again now (the reading itself is done).
       const s0 = await started.catch(() => call('startPage', { page: i, extra: state.extra }));
       if (s0.expired) return s0;
-      return call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, attemptId, durSec });
+      return call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, extraWords, attemptId, durSec });
     };
     const save = async () => {
       resultSaving('saving');
@@ -403,7 +403,7 @@ async function readingScreen(i, t0, started) {
 }
 
 /** The page result, shown before the server has answered. */
-function resultScreen(i, res, statuses, said = {}) {
+function resultScreen(i, res, statuses, said = {}, extraWords = []) {
   const st = story();
   const a = res.attempt;
   $('result-score').textContent = `${a.acc}%`;
@@ -411,6 +411,11 @@ function resultScreen(i, res, statuses, said = {}) {
   $('result-line').textContent = (res.below ? 'העמוד הזה היה קשה.' : 'כל הכבוד!') +
     ` ${a.errors} טעויות מתוך ${a.n} מילים.` + (res.canRetry ? ' אפשר לקרוא אותו שוב פעם אחת.' : '');
   $('result-kinds').textContent = errorKinds(a);
+  // Extra words are not in the text, so they cannot be coloured there: list what was heard.
+  $('result-extra').hidden = !extraWords.length;
+  $('result-extra').innerHTML = extraWords.length
+    ? 'מילים נוספות ששמענו: <span lang="en" dir="ltr">' + esc(extraWords.join(', ')) + '</span>'
+    : '';
   const spans = renderPage($('result-text'), st.pages[i].text);
   showStatuses(spans, statuses, said);
   $('result-text').onclick = (e) => {

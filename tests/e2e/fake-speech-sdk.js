@@ -2,7 +2,8 @@
 // It "reads" the reference text aloud, word by word, following window.__fakeReading:
 //   { skip: [word indexes to leave out], mis: [indexes said badly], perWordMs: 25,
 //     cancelAt: word index where Microsoft drops the connection,
-//     replace: {word index: another word said instead} }
+//     replace: {word index: another word said instead},
+//     insert: {word index: [words said after it]} }
 (function () {
   const RECOGNIZED = 3;
 
@@ -19,10 +20,12 @@
     constructor() { this.timers = []; this.authorizationToken = ''; }
     startContinuousRecognitionAsync(ok) {
       ok();
-      const plan = Object.assign({ skip: [], mis: [], perWordMs: 25, replace: {} }, window.__fakeReading || {});
-      const words = this._ref.split(' ')
-        .map((w, i) => ({ word: (plan.replace[i] || w).toLowerCase(), acc: plan.mis.includes(i) ? 20 : 95, i }))
-        .filter((w) => !plan.skip.includes(w.i));
+      const plan = Object.assign({ skip: [], mis: [], perWordMs: 25, replace: {}, insert: {} }, window.__fakeReading || {});
+      const words = [];
+      this._ref.split(' ').forEach((w, i) => {
+        if (!plan.skip.includes(i)) words.push({ word: (plan.replace[i] || w).toLowerCase(), acc: plan.mis.includes(i) ? 20 : 95, i });
+        (plan.insert[i] || []).forEach((x) => words.push({ word: x, acc: 95, i: -1 }));
+      });
       let segment = [];
       words.forEach((w, k) => {
         if (plan.cancelAt !== undefined && k > plan.cancelAt) return;

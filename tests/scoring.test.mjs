@@ -172,3 +172,18 @@ test('a lone "a"/"the" Microsoft did not hear is not counted; a skipped line wit
   const r2 = alignPage(ref2, heard('the cat ran sat'));
   assert.deepEqual(r2.statuses.slice(3, 8), ['om', 'om', 'om', 'om', 'om']);
 });
+
+test('going back to read a phrase again is not counted as extra words', () => {
+  const ref = tokenize('Ben and his dog followed the little creature through the shady woods. They walked past big bushes.');
+  const r = alignPage(ref, heard('ben and his dog followed the little creature the little creature through the shady woods they walked past big bushes'));
+  assert.equal(r.insertions, 0);
+  const r2 = alignPage(ref, heard('ben and his dog followed the little creature through the shady woods ben and his dog followed they walked past big bushes'));
+  assert.equal(r2.insertions, 0, 'a whole sentence read again');
+});
+
+test('words that are not in the text nearby are extra words, and are listed', () => {
+  const ref = tokenize('The little fox felt much better and warmer.');
+  const r = alignPage(ref, heard('the little fox felt much better pizza robot and warmer'));
+  assert.equal(r.insertions, 2);
+  assert.deepEqual(r.extraWords, ['pizza', 'robot']);
+});

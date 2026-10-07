@@ -471,3 +471,13 @@ test('every answer names the action it answers', () => {
   assert.equal(s.api({ action: 'ping' }).a, 'ping');
   assert.equal(s.k({ action: 'startPage', page: 0 }).a, 'startPage');
 });
+
+test('the extra words heard are kept with the attempt and shown in the pages tab', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  s.k({ action: 'startPage', page: 0 });
+  const words = tokenize(story.pages[0].text).map(() => 'ok');
+  s.k({ action: 'submitPage', page: 0, words, insertions: 2, extraWords: ['pizza', 'robot'], attemptId: 'e1' });
+  const row = s.book().getSheetByName('עמודים').rows().at(-1);
+  assert.match(row[15], /נוספו: pizza, robot/);
+});
