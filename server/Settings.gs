@@ -18,12 +18,13 @@ var SHEETS = {
 /** Every setting, its explanation for the parent, its default and type. */
 var SETTING_DEFS = [
   { key: 'name', label: 'שם הילד, כפי שיופיע במסך ובמייל', def: 'אלין', type: 'string' },
+  { key: 'age', label: 'גיל הילד. קובע איזה סיפור יעניין אותו (העלילה, הדמויות). רמת האנגלית נקבעת בשורת הרמה', def: 10, type: 'int' },
   { key: 'code', label: 'קוד סודי לקישור. לא לשתף', def: '', type: 'string' },
   { key: 'link', label: 'הקישור האישי, נוצר אוטומטית', def: '', type: 'string' },
   { key: 'active', label: 'פעיל: כן או לא', def: 'כן', type: 'bool' },
   { key: 'words', label: 'אורך הסיפור במילים', def: 400, type: 'int' },
   { key: 'pages', label: 'מספר עמודים', def: 5, type: 'int' },
-  { key: 'level', label: 'רמה: מתחילים, מתחילים מתקדמים, בינוני', def: 'מתחילים מתקדמים', type: 'string' },
+  { key: 'level', label: 'רמת האנגלית: מתחילים, בינוני או מתקדם', def: 'בינוני', type: 'string' },
   { key: 'passMode', label: 'סוג סף: אחוזים או שגיאות', def: 'אחוזים', type: 'string' },
   { key: 'passPercent', label: 'סף מעבר באחוזי דיוק', def: 85, type: 'int' },
   { key: 'maxErrors', label: 'מספר שגיאות מקסימלי, כשסוג הסף הוא שגיאות', def: 60, type: 'int' },
@@ -99,6 +100,9 @@ function normalizeChild(c) {
   c.pages = Math.max(1, Math.min(12, c.pages));
   c.words = Math.max(60, Math.min(2000, c.words));
   c.hintsPerPage = Math.max(0, c.hintsPerPage);
+  c.age = Math.max(4, Math.min(18, c.age));
+  // Before the levels were renamed, "מתחילים מתקדמים" was the middle level.
+  if (c.level === 'מתחילים מתקדמים') c.level = 'בינוני';
   c.lang = c.accent.indexOf('בריט') === 0 ? 'en-GB' : 'en-US';
   c.passByErrors = c.passMode.indexOf('שגיא') === 0;
   c.suggestionList = c.suggestions

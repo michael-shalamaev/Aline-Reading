@@ -43,6 +43,7 @@ function setup() {
     st.setColumnWidth(2, 380);
     st.setColumnWidth(3, 220);
     st.getRange('A:A').setFontColor('#888888');
+    setProp('LEVELS_RENAMED', '1'); // a new sheet already has the new level names
   }
   addMissingSettings(st);
   writeLinks();
@@ -55,7 +56,22 @@ function setup() {
 function addMissingSettings(st) {
   var values = st.getDataRange().getValues();
   var have = {};
-  values.forEach(function (r) { have[String(r[0])] = true; });
+  values.forEach(function (r, i) {
+    var key = String(r[0]);
+    have[key] = true;
+    // Keep the explanation in column B up to date.
+    var d = SETTING_DEFS.filter(function (x) { return x.key === key; })[0];
+    if (d && r[1] !== d.label) st.getRange(i + 1, 2).setValue(d.label);
+    // Levels renamed once: old "בינוני" (B1) is now "מתקדם", old "מתחילים מתקדמים" (A2) is now "בינוני".
+    if (key === 'level' && !prop('LEVELS_RENAMED')) {
+      for (var c = 2; c < r.length; c++) {
+        var v = String(r[c]).trim();
+        var nv = v === 'בינוני' ? 'מתקדם' : (v === 'מתחילים מתקדמים' ? 'בינוני' : v);
+        if (nv !== v) st.getRange(i + 1, c + 1).setValue(nv);
+      }
+      setProp('LEVELS_RENAMED', '1');
+    }
+  });
   var width = Math.max(3, values[0].length);
   SETTING_DEFS.forEach(function (d) {
     if (have[d.key]) return;

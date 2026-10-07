@@ -7,8 +7,8 @@ var GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 var LEVEL_GUIDE = {
   'מתחילים': 'CEFR A1: very short sentences (5-8 words), present simple and past simple only, the 500 most common English words.',
-  'מתחילים מתקדמים': 'CEFR A2: short sentences (6-12 words), simple tenses, everyday vocabulary, a few new words that the story makes clear.',
-  'בינוני': 'CEFR B1: sentences up to 16 words, varied tenses, richer vocabulary suitable for a strong 10-12 year old reader.'
+  'בינוני': 'CEFR A2: short sentences (6-12 words), simple tenses, everyday vocabulary, a few new words that the story makes clear.',
+  'מתקדם': 'CEFR B1: sentences up to 16 words, varied tenses, richer vocabulary.'
 };
 
 /**
@@ -94,7 +94,8 @@ function storyPrompt(child, topic, withQuestions) {
     'If the topic does not fit a gentle children\'s story, or names real brands or famous people, ',
     'write about a close, friendly version of it and set topicAdjusted to true.',
     '',
-    'Level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['מתחילים מתקדמים']),
+    'The story should suit readers about ' + child.age + ' years old: interests, characters and humor for that age.',
+    'English level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['בינוני']),
     'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each (total about ' + child.words + ' words).',
     'Split pages at natural points. Each page is one to three paragraphs separated by a blank line.',
     '',
