@@ -521,3 +521,44 @@ test('a sheet not yet updated with the old name "מתחילים מתקדמים" 
   s.ctx.clearSettingsCache();
   assert.match(s.ctx.storyPrompt(s.ctx.readChildren()[0], 'x', true), /CEFR A2/);
 });
+
+test('the last answer sums the story up on the server: result, log row and mail without the phone asking', () => {
+  const s = ready();
+  const story = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  story.pages.forEach((p, i) => {
+    s.k({ action: 'startPage', page: i });
+    s.k({ action: 'submitPage', page: i, words: tokenize(p.text).map(() => 'ok'), insertions: 0, attemptId: 'a' + i });
+    s.k({ action: 'answer', kind: 'page', page: i, choice: 1 });
+  });
+  s.k({ action: 'answer', kind: 'final', index: 0, choice: 1 });
+  s.k({ action: 'answer', kind: 'final', index: 1, choice: 1 });
+  assert.equal(s.mails.length, 0, 'not before the last answer');
+  s.k({ action: 'answer', kind: 'final', index: 2, choice: 1 });
+  const sess = s.k({ action: 'init' }).data.session;
+  assert.equal(sess.finished, true);
+  assert.equal(sess.result.passed, true);
+  assert.equal(s.mails.length, 1);
+  assert.equal(s.book().getSheetByName('יומן').rows().length, 2);
+  const again = s.k({ action: 'finish' });
+  assert.equal(again.data.again, true, 'the phone asking later gets the same result');
+  assert.equal(s.mails.length, 1);
+});
+
+test('a story without questions is summed up with its last page, but not while that page may be read again', () => {
+  const s = ready();
+  const main = s.k({ action: 'newStory', topic: 'dragons' }).data.story;
+  readAll(s, main);
+  const extra = s.k({ action: 'newStory', topic: 'cats', extra: true }).data.story;
+  extra.pages.forEach((p, i) => {
+    s.k({ action: 'startPage', page: i, extra: true });
+    const n = tokenize(p.text).length;
+    const bad = i === extra.pages.length - 1;
+    const words = Array.from({ length: n }, (_, j) => (bad && j < n / 2 ? 'om' : 'ok'));
+    s.k({ action: 'submitPage', page: i, extra: true, words, insertions: 0, attemptId: 'x' + i });
+  });
+  assert.equal(s.mails.length, 1, 'last page below the bar: a retry is offered, nothing summed up yet');
+  const last = extra.pages.length - 1;
+  s.k({ action: 'startPage', page: last, extra: true });
+  s.k({ action: 'submitPage', page: last, extra: true, words: tokenize(extra.pages[last].text).map(() => 'ok'), insertions: 0, attemptId: 'y' });
+  assert.equal(s.mails.length, 2, 'summed up after the retry');
+});

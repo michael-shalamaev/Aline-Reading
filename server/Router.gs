@@ -186,6 +186,7 @@ function submitAnswer(child, sess, i, a) {
 
 function actSubmitPage(child, req) {
   var logRow = null;
+  var closing = null;
   var out = withLock(function () {
     var sess = loadActive(child, req);
     var i = pageIndex(sess, req);
@@ -214,15 +215,20 @@ function actSubmitPage(child, req) {
     delete sess.state.pageStartedAt[i];
     saveSession(sess);
     logRow = function () { logPageAttempt(child, sess, i, p.attempts.length, a, pageBelowBar(child, a, sess.story.wordCount)); };
-    return submitAnswer(child, sess, i, a);
+    var answer = submitAnswer(child, sess, i, a);
+    // A story without questions is complete with its last page (unless that page may still be read again).
+    if (!answer.canRetry && storyComplete(child, sess)) closing = closeStory(child, sess);
+    return answer;
   });
   // The attempt is saved; the parent's log row is written after the lock is released.
   if (logRow) { try { logRow(); } catch (e) { logError(child.id, 'logPageAttempt', e); } }
+  if (closing) closing();
   return out;
 }
 
 function actAnswer(child, req) {
-  return withLock(function () {
+  var closing = null;
+  var out = withLock(function () {
     var sess = loadActive(child, req);
     var choice = parseInt(req.choice, 10);
     if (!(choice >= 0 && choice <= 3)) fail('bad_payload', 'Bad choice');
@@ -243,9 +249,39 @@ function actAnswer(child, req) {
       slot = p.answer;
     }
     saveSession(sess);
+    // The last answer completes the story: it is summed up here, on the server, so the
+    // result, the log and the mail do not depend on the phone staying open.
+    if (storyComplete(child, sess)) closing = closeStory(child, sess);
     // The first answer counts; the correct option is shown either way.
     return { correct: slot.correct, choice: slot.choice, correctIndex: q.answer };
   });
+  if (closing) closing();
+  return out;
+}
+
+/** Every page read and, if the story has questions, every question answered. */
+function storyComplete(child, sess) {
+  var s = sess.state;
+  if (s.finished || s.pages.some(function (p) { return p.best < 0; })) return false;
+  if (s.extra && !child.extraQuestions) return true;
+  return !s.pages.some(function (p) { return !p.answer; }) && !s.finalAnswers.some(function (a) { return !a; });
+}
+
+/**
+ * Sums the story up and saves it (inside the lock). Returns what comes after the lock:
+ * the parent's log row, the hard words and the mail.
+ */
+function closeStory(child, sess) {
+  var s = sess.state;
+  var r = finalResult(child, sess);
+  s.result = r;
+  s.finished = true;
+  saveSession(sess);
+  return function () {
+    try { logSession(child, sess, r); } catch (e) { logError(child.id, 'logSession', e); }
+    try { withLock(function () { updateHardWords(child, sess); }); } catch (e) { logError(child.id, 'updateHardWords', e); }
+    try { sendSummaryMail(child, sess, r); } catch (e) { logError(child.id, 'sendSummaryMail', e); }
+  };
 }
 
 function actPractice(child, req) {
@@ -284,15 +320,8 @@ function actFinish(child, req) {
         s.finalAnswers.some(function (a) { return !a; });
       if (missing) fail('too_early', 'Not all questions were answered');
     }
-    var r = finalResult(child, sess);
-    s.result = r;
-    s.finished = true;
-    saveSession(sess);
-    after = function () {
-      try { logSession(child, sess, r); } catch (e) { logError(child.id, 'logSession', e); }
-      try { withLock(function () { updateHardWords(child, sess); }); } catch (e) { logError(child.id, 'updateHardWords', e); }
-      try { sendSummaryMail(child, sess, r); } catch (e) { logError(child.id, 'sendSummaryMail', e); }
-    };
+    after = closeStory(child, sess);
+    var r = s.result;
     return { result: r, extraAllowed: !s.extra && r.passed && child.extraAllowed };
   });
   // The story is finished and saved; the parent's log, hard words and mail come after the lock.

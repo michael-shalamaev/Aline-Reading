@@ -402,3 +402,28 @@ test('reading a phrase again is no error; words not in the text are listed under
     await app.shot('f6-extra-words');
   } finally { await app.close(); }
 });
+
+test('the app is closed while summing up: the server has already summed the story up', async () => {
+  const app = await startApp({ fault: (r) => (r.action === 'finish' ? { drop: 'before' } : null) });
+  try {
+    await toFirstPage(app);
+    const k = app.code;
+    const st = app.session().story;
+    st.pages.forEach((pg, i) => {
+      app.server.api({ action: 'startPage', page: i, k });
+      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    });
+    [0, 1].forEach((f) => app.server.api({ action: 'answer', kind: 'final', index: f, choice: 1, k }));
+    await app.open();
+    await app.screen('question');
+    await app.page.click('.option[data-i="1"]');
+    await app.page.waitForSelector('.next:not([hidden])');
+    await app.page.click('.next');
+    await app.screen('loading'); // "מסכמים…": the summing-up request never gets through
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(app.session().finished, true, 'summed up by the last answer');
+    assert.equal(app.server.mails.length, 1);
+    await app.close();
+  } catch (e) { await app.close(); throw e; }
+});
