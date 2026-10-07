@@ -273,19 +273,63 @@ test('bridge down: the child is not affected; rows and mail wait and arrive late
   assert.equal(s.rows('יומן').length, 2);
 });
 
-test('settings: read from the sheet, kept 10 minutes; if the sheet is unreachable the last known are used', async () => {
+test('settings: read from the sheet; after 10 minutes refreshed in the background (nobody waits); sheet down → last known', async () => {
   const s = loadWorker();
   await s.k({ action: 'init' });
   s.rows('הגדרות').find((r) => r[0] === 'pages')[2] = 3;
   s.clock.now += 5 * 60000;
-  assert.equal((await s.k({ action: 'init' })).data.child.pages, 5, 'still the cached settings');
+  assert.equal((await s.k({ action: 'init' })).data.child.pages, 5, 'still the kept settings');
   s.clock.now += 6 * 60000;
-  assert.equal((await s.k({ action: 'init' })).data.child.pages, 3, 'changes apply after 10 minutes');
+  const calls = s.bridge.calls.length;
+  assert.equal((await s.k({ action: 'init' })).data.child.pages, 5, 'answered at once with the kept ones');
+  await s.settle();
+  assert.equal(s.bridge.calls.length, calls + 1, 'refreshed in the background');
+  assert.equal((await s.k({ action: 'init' })).data.child.pages, 3, 'the change applies from the next request');
   s.bridge.down = true;
   s.clock.now += 11 * 60000;
   const r = await s.k({ action: 'init' });
   assert.equal(r.ok, true, 'works with the last known settings');
   assert.equal(r.data.child.pages, 3);
+  await s.settle();
+  s.bridge.down = false;
+  s.clock.now += 31 * 60000;
+  while ((await s.flush()).sent) { /* */ }
+  assert.ok(s.rows('שגיאות').some((row) => /settings refresh/.test(row[2])), 'the failed refresh is reported');
+});
+
+test('two new-story requests at the same moment: one story for the day, not two', async () => {
+  const s = loadWorker();
+  const [a, b] = await Promise.all([s.k({ action: 'newStory', topic: 'a' }), s.k({ action: 'newStory', topic: 'b' })]);
+  assert.equal(a.ok && b.ok, true);
+  assert.equal(a.data.id, b.data.id, 'the same session');
+  const n = await s.env.DB.prepare('SELECT COUNT(*) AS n FROM sessions').first();
+  assert.equal(n.n, 1);
+});
+
+test('two summing-up requests at the same moment: both get the result, one mail', async () => {
+  const s = loadWorker();
+  const story = (await s.k({ action: 'newStory', topic: 'dragons' })).data.story;
+  for (let i = 0; i < story.pages.length; i++) {
+    await s.k({ action: 'startPage', page: i });
+    await s.k({ action: 'submitPage', page: i, words: tokenize(story.pages[i].text).map(() => 'ok'), insertions: 0, attemptId: 'a' + i });
+  }
+  const answers = { pages: [1, 1, 1, 1, 1], final: [1, 1, 1] };
+  const [x, y] = await Promise.all([s.k({ action: 'finish', answers }), s.k({ action: 'finish', answers })]);
+  assert.equal(x.ok, true, JSON.stringify(x.error));
+  assert.equal(y.ok, true, JSON.stringify(y.error));
+  assert.equal(x.data.result.acc, y.data.result.acc);
+  await s.settle();
+  assert.equal(s.mails.length, 1);
+});
+
+test('the bridge does an item once even if it is sent twice (its answer got lost)', () => {
+  const s = loadWorker();
+  const secret = s.gas.props.get('BRIDGE_SECRET');
+  const item = { id: 77, kind: 'error', childId: 'אלין', action: 'x', message: 'once' };
+  s.gas.api({ action: 'bridgeReport', secret, items: [item] });
+  const again = s.gas.api({ action: 'bridgeReport', secret, items: [item] });
+  assert.equal(again.data.results[0].again, true);
+  assert.equal(s.rows('שגיאות').filter((r) => r[3] === 'once').length, 1);
 });
 
 test('settings: never reached and the sheet is down → a clear error; wrong bridge secret → config_missing', async () => {

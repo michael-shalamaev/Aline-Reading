@@ -5,7 +5,8 @@
 import { clock } from './util.js';
 import { bridgeCall } from './bridge.js';
 
-const BATCH = 20;
+const BATCH = 5;            // small, so a batch fits in the time Cloudflare gives after an answer
+const SEND_TIMEOUT_MS = 25000;
 const CLAIM_MS = 120000; // a batch being sent is not picked up by a second request meanwhile
 
 export async function report(env, item) {
@@ -22,7 +23,7 @@ export async function flushReports(env) {
   if (!rows.length) return { sent: 0, failed: 0 };
   const items = rows.map((r) => ({ ...JSON.parse(r.item), id: r.id }));
   try {
-    await bridgeCall(env, 'bridgeReport', { items });
+    await bridgeCall(env, 'bridgeReport', { items }, SEND_TIMEOUT_MS);
   } catch (e) {
     // Google did not take them: try again later, waiting longer each time (at most 30 minutes).
     const stmts = rows.map((r) => env.DB.prepare('UPDATE reports SET tries = tries + 1, next_at = ?, last_error = ? WHERE id = ?')

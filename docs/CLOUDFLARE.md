@@ -109,6 +109,7 @@ Settings → Variables and Secrets → Add
 |---|---|
 | `AZURE_SPEECH_REGION` | `uaenorth` |
 | `BRIDGE_URL` | כתובת הסקריפט, זו שמסתיימת ב־`exec` |
+| `ALLOWED_ORIGIN` | `https://michael-shalamaev.github.io` |
 
 שומרים ומפרסמים.
 

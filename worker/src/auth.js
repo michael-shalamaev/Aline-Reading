@@ -5,9 +5,9 @@ import { readChildren } from './settings.js';
 
 const RATE_LIMIT_PER_MINUTE = 60;
 
-export async function authChild(env, code) {
+export async function authChild(env, code, ctx) {
   if (!code) fail('unauthorized', 'Missing code');
-  const children = await readChildren(env);
+  const children = await readChildren(env, ctx);
   const child = children.find((c) => c.code === String(code).trim());
   if (!child) fail('unauthorized', 'Unknown code');
   if (!child.active) fail('inactive', 'This child is not active');

@@ -80,6 +80,8 @@ const SCHEMA = [
      id TEXT PRIMARY KEY, child TEXT NOT NULL, day TEXT NOT NULL, extra INTEGER NOT NULL,
      created INTEGER NOT NULL, story TEXT, state TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0)`,
   'CREATE INDEX IF NOT EXISTS sessions_by_day ON sessions (child, day, extra, created)',
+  // One main story per child per day, even when two requests create it at the same moment.
+  'CREATE UNIQUE INDEX IF NOT EXISTS one_main_per_day ON sessions (child, day) WHERE extra = 0',
   'CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, until INTEGER NOT NULL)',
   `CREATE TABLE IF NOT EXISTS reports (
      id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 0,
@@ -132,11 +134,25 @@ async function findSession(db, child, day, extra, includeFinished = false) {
   return sess;
 }
 
-async function createSession(db, child, day, extra, state) {
+/**
+ * Today's session, created if there is none. Two requests at the same moment get the same
+ * row: the main story has a unique index, an extra one is only added if no unfinished one exists.
+ */
+async function findOrCreateSession(db, child, day, extra, makeState) {
+  const found = await findSession(db, child, day, extra);
+  if (found) return found;
+  const state = makeState();
   const created = clock.now();
-  await db.prepare('INSERT INTO sessions (id, child, day, extra, created, story, state, version) VALUES (?, ?, ?, ?, ?, NULL, ?, 0)')
-    .bind(state.id, child.id, day, extra ? 1 : 0, created, JSON.stringify(state)).run();
-  return { row: state.id, version: 0, created, story: null, state };
+  if (extra) {
+    await db.prepare(`INSERT INTO sessions (id, child, day, extra, created, story, state, version)
+      SELECT ?, ?, ?, 1, ?, NULL, ?, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM sessions WHERE child = ? AND day = ? AND extra = 1 AND json_extract(state, '$.finished') = 0)`)
+      .bind(state.id, child.id, day, created, JSON.stringify(state), child.id, day).run();
+  } else {
+    await db.prepare('INSERT OR IGNORE INTO sessions (id, child, day, extra, created, story, state, version) VALUES (?, ?, ?, 0, ?, NULL, ?, 0)')
+      .bind(state.id, child.id, day, created, JSON.stringify(state)).run();
+  }
+  return findSession(db, child, day, extra);
 }
 
 /**
@@ -166,24 +182,29 @@ async function updateSession(db, load, step) {
       delete sess.dirty;
       if (!(await saveSession(db, sess))) continue;
     }
-    if (sess) for (const fn of sess.after) await fn();
+    if (sess) {
+      for (const fn of sess.after) {
+        try { await fn(); } catch (e) { console.error('after save', e); } // the state is saved; the rest still runs
+      }
+    }
     return out;
   }
   fail('busy', 'The session kept changing; try again');
 }
 
-return { ensureSchema, resetSchemaFlag, kvGet, kvPut, kvDelete, findSession, createSession, saveSession, updateSession };
+return { ensureSchema, resetSchemaFlag, kvGet, kvPut, kvDelete, findSession, findOrCreateSession, saveSession, updateSession };
 })();
 
 // ---- bridge.js ----
 const __bridge = (() => {
 // bridge.js — talks to the existing Google Apps Script (server/Bridge.gs): settings from
-// the sheet, and rows and mails for the parent. Never on the child's waiting path.
+// the sheet, and rows and mails for the parent. Rows and mails never keep the child waiting;
+// settings only on the very first request (afterwards they are refreshed in the background).
 
 const { AppError } = __util;
 const BRIDGE_TIMEOUT_MS = 60000;
 
-async function bridgeCall(env, action, body = {}) {
+async function bridgeCall(env, action, body = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
   if (!env.BRIDGE_URL || !env.BRIDGE_SECRET) throw new AppError('config_missing', 'BRIDGE_URL / BRIDGE_SECRET not set');
   let res;
   try {
@@ -192,7 +213,7 @@ async function bridgeCall(env, action, body = {}) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, secret: env.BRIDGE_SECRET, ...body }),
       redirect: 'follow',
-      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
   } catch (e) {
     throw new AppError('bridge_down', String(e));
@@ -220,7 +241,8 @@ const __reports = (() => {
 
 const { clock } = __util;
 const { bridgeCall } = __bridge;
-const BATCH = 20;
+const BATCH = 5;            // small, so a batch fits in the time Cloudflare gives after an answer
+const SEND_TIMEOUT_MS = 25000;
 const CLAIM_MS = 120000; // a batch being sent is not picked up by a second request meanwhile
 
 async function report(env, item) {
@@ -237,7 +259,7 @@ async function flushReports(env) {
   if (!rows.length) return { sent: 0, failed: 0 };
   const items = rows.map((r) => ({ ...JSON.parse(r.item), id: r.id }));
   try {
-    await bridgeCall(env, 'bridgeReport', { items });
+    await bridgeCall(env, 'bridgeReport', { items }, SEND_TIMEOUT_MS);
   } catch (e) {
     // Google did not take them: try again later, waiting longer each time (at most 30 minutes).
     const stmts = rows.map((r) => env.DB.prepare('UPDATE reports SET tries = tries + 1, next_at = ?, last_error = ? WHERE id = ?')
@@ -260,31 +282,41 @@ return { report, flushReports, pendingReports };
 
 // ---- settings.js ----
 const __settings = (() => {
-// settings.js — the children's settings come from the sheet (through the bridge), and are
-// kept here for 10 minutes. If the sheet cannot be reached, the last known settings are used.
+// settings.js — the children's settings come from the sheet (through the bridge).
+// They are refreshed every 10 minutes in the background: a request never waits for Google,
+// except the very first one ever. If the sheet cannot be reached, the last known settings stay.
 
-const { fail, AppError } = __util;
+const { fail, clock } = __util;
 const { kvGet, kvPut } = __store;
 const { bridgeCall } = __bridge;
 const { report } = __reports;
 const SETTINGS_CACHE_SEC = 600;
 const KEY = 'children';
+const KEEP_SEC = 365 * 86400;
+const FIRST_TIMEOUT_MS = 20000;
 
-async function readChildren(env) {
-  const fresh = await kvGet(env.DB, KEY);
-  if (fresh) return fresh;
+async function fetchChildren(env, timeoutMs) {
+  const data = await bridgeCall(env, 'bridgeSettings', {}, timeoutMs);
+  await kvPut(env.DB, KEY, { children: data.children, fresh: clock.now() + SETTINGS_CACHE_SEC * 1000 }, KEEP_SEC);
+  if (data.sheetUrl) await kvPut(env.DB, 'sheetUrl', data.sheetUrl, KEEP_SEC);
+  return data.children;
+}
+
+async function readChildren(env, ctx) {
+  const kept = await kvGet(env.DB, KEY);
+  if (kept && kept.fresh > clock.now()) return kept.children;
+  if (kept) {
+    // Old but usable: answer with it now, refresh for the next request.
+    await kvPut(env.DB, KEY, { ...kept, fresh: clock.now() + 60000 }, KEEP_SEC); // one refresh at a time
+    const refresh = fetchChildren(env).catch((e) =>
+      report(env, { kind: 'error', childId: '', action: 'settings refresh (the last known are used)', message: `${e.code}: ${e.message}` }));
+    if (ctx && ctx.waitUntil) ctx.waitUntil(refresh); else await refresh;
+    return kept.children;
+  }
   try {
-    const data = await bridgeCall(env, 'bridgeSettings');
-    await kvPut(env.DB, KEY, data.children, SETTINGS_CACHE_SEC);
-    if (data.sheetUrl) await kvPut(env.DB, 'sheetUrl', data.sheetUrl, 365 * 86400);
-    return data.children;
+    return await fetchChildren(env, FIRST_TIMEOUT_MS);
   } catch (e) {
-    const stale = await kvGet(env.DB, KEY, { allowStale: true });
-    if (stale) {
-      await report(env, { kind: 'error', childId: '', action: 'settings (using the last known)', message: `${e.code}: ${e.message}` });
-      return stale;
-    }
-    if (e instanceof AppError && e.code === 'bridge_unauthorized') fail('config_missing', 'Bridge secret does not match the script');
+    if (e.code === 'bridge_unauthorized' || e.code === 'config_missing') fail('config_missing', 'The bridge to the sheet is not set up: ' + e.message);
     fail('settings_unavailable', 'Settings could not be read: ' + e.message);
   }
 }
@@ -319,9 +351,9 @@ const { fail, clock } = __util;
 const { readChildren } = __settings;
 const RATE_LIMIT_PER_MINUTE = 60;
 
-async function authChild(env, code) {
+async function authChild(env, code, ctx) {
   if (!code) fail('unauthorized', 'Missing code');
-  const children = await readChildren(env);
+  const children = await readChildren(env, ctx);
   const child = children.find((c) => c.code === String(code).trim());
   if (!child) fail('unauthorized', 'Unknown code');
   if (!child.active) fail('inactive', 'This child is not active');
@@ -566,7 +598,8 @@ async function issueSpeechToken(env) {
   if (hit) return { token: hit.token, region, ttlSec: TOKEN_LIFE_SEC - Math.floor((clock.now() - hit.at) / 1000) };
   const res = await fetch(`https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`, {
     method: 'POST',
-    headers: { 'Ocp-Apim-Subscription-Key': env.AZURE_SPEECH_KEY, 'Content-Length': '0' }
+    headers: { 'Ocp-Apim-Subscription-Key': env.AZURE_SPEECH_KEY },
+    body: ''
   });
   const text = await res.text();
   if (res.status !== 200) fail('speech_token_error', `Microsoft ${res.status}: ${text.slice(0, 200)}`);
@@ -741,7 +774,7 @@ const __router = (() => {
 // page works with either server. Every answer: {ok, a, v, t, ms, lockMs, data | error}.
 
 const { SERVER_VERSION, AppError, fail, clock, todayStr } = __util;
-const { ensureSchema, findSession, createSession, updateSession } = __store;
+const { ensureSchema, findSession, findOrCreateSession, updateSession } = __store;
 const { authChild } = __auth;
 const { publicSettings } = __settings;
 const { generateStory } = __stories;
@@ -767,7 +800,7 @@ async function handle(req, env, ctx) {
     await ensureSchema(env.DB);
     const fn = ACTIONS[action];
     if (!fn) fail('unknown_action', action);
-    const child = action === 'ping' ? null : await authChild(env, req.k);
+    const child = action === 'ping' ? null : await authChild(env, req.k, ctx);
     childId = child ? child.id : '';
     const data = await fn(env, child, req);
     out = { ok: true, a: action, v: SERVER_VERSION, t: clock.now(), ms: clock.now() - t0, lockMs: 0, data };
@@ -880,8 +913,7 @@ async function actNewStory(env, child, req) {
 
   const story = await generateStory(env, child, topic, !extra || child.extraQuestions);
 
-  const load = async () => (await findSession(env.DB, child, todayStr(), extra)) ||
-    createSession(env.DB, child, todayStr(), extra, blankState(child, extra));
+  const load = () => findOrCreateSession(env.DB, child, todayStr(), extra, () => blankState(child, extra));
   return updateSession(env.DB, load, async (sess) => {
     if (sess.state.startedAt) fail('locked', 'Reading already started');
     if (sess.story) sess.state.regenUsed++;
@@ -907,7 +939,7 @@ async function actStartPage(env, child, req) {
   if (!out.expired) {
     out.speech = null;
     try { out.speech = await issueSpeechToken(env); } catch (e) {
-      await report(env, { kind: 'error', childId: child.id, action: 'startPage token', message: `${e.code}: ${e.message}` });
+      await report(env, { kind: 'error', childId: child.id, action: 'startPage token', message: `${e.code || e.name}: ${e.message}` });
     }
   }
   return out;
@@ -1000,12 +1032,11 @@ async function actPractice(env, child, req) {
 }
 
 async function actFinish(env, child, req) {
-  // Summing up twice (the first answer got lost on the way) gives the same result again.
-  const done = await findSession(env.DB, child, todayStr(), !!req.extra, true);
-  if (done && done.story && done.state.finished) {
-    return { result: done.state.result, extraAllowed: !done.state.extra && done.state.result.passed && child.extraAllowed, again: true };
-  }
-  return updateSession(env.DB, loader(env, child, req.extra), async (sess) => {
+  return updateSession(env.DB, loader(env, child, req.extra, true), async (sess) => {
+    // Summing up twice (the first answer got lost, or two at once) gives the same result again.
+    if (sess && sess.story && sess.state.finished) {
+      return { result: sess.state.result, extraAllowed: !sess.state.extra && sess.state.result.passed && child.extraAllowed, again: true };
+    }
     loadActive(sess);
     const s = sess.state;
     if (s.pages.some((p) => p.best < 0)) fail('too_early', 'Not all pages were read');

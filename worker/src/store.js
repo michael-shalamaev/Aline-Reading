@@ -9,6 +9,8 @@ const SCHEMA = [
      id TEXT PRIMARY KEY, child TEXT NOT NULL, day TEXT NOT NULL, extra INTEGER NOT NULL,
      created INTEGER NOT NULL, story TEXT, state TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0)`,
   'CREATE INDEX IF NOT EXISTS sessions_by_day ON sessions (child, day, extra, created)',
+  // One main story per child per day, even when two requests create it at the same moment.
+  'CREATE UNIQUE INDEX IF NOT EXISTS one_main_per_day ON sessions (child, day) WHERE extra = 0',
   'CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL, until INTEGER NOT NULL)',
   `CREATE TABLE IF NOT EXISTS reports (
      id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 0,
@@ -61,11 +63,25 @@ export async function findSession(db, child, day, extra, includeFinished = false
   return sess;
 }
 
-export async function createSession(db, child, day, extra, state) {
+/**
+ * Today's session, created if there is none. Two requests at the same moment get the same
+ * row: the main story has a unique index, an extra one is only added if no unfinished one exists.
+ */
+export async function findOrCreateSession(db, child, day, extra, makeState) {
+  const found = await findSession(db, child, day, extra);
+  if (found) return found;
+  const state = makeState();
   const created = clock.now();
-  await db.prepare('INSERT INTO sessions (id, child, day, extra, created, story, state, version) VALUES (?, ?, ?, ?, ?, NULL, ?, 0)')
-    .bind(state.id, child.id, day, extra ? 1 : 0, created, JSON.stringify(state)).run();
-  return { row: state.id, version: 0, created, story: null, state };
+  if (extra) {
+    await db.prepare(`INSERT INTO sessions (id, child, day, extra, created, story, state, version)
+      SELECT ?, ?, ?, 1, ?, NULL, ?, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM sessions WHERE child = ? AND day = ? AND extra = 1 AND json_extract(state, '$.finished') = 0)`)
+      .bind(state.id, child.id, day, created, JSON.stringify(state), child.id, day).run();
+  } else {
+    await db.prepare('INSERT OR IGNORE INTO sessions (id, child, day, extra, created, story, state, version) VALUES (?, ?, ?, 0, ?, NULL, ?, 0)')
+      .bind(state.id, child.id, day, created, JSON.stringify(state)).run();
+  }
+  return findSession(db, child, day, extra);
 }
 
 /**
@@ -95,7 +111,11 @@ export async function updateSession(db, load, step) {
       delete sess.dirty;
       if (!(await saveSession(db, sess))) continue;
     }
-    if (sess) for (const fn of sess.after) await fn();
+    if (sess) {
+      for (const fn of sess.after) {
+        try { await fn(); } catch (e) { console.error('after save', e); } // the state is saved; the rest still runs
+      }
+    }
     return out;
   }
   fail('busy', 'The session kept changing; try again');

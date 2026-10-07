@@ -2,7 +2,7 @@
 // page works with either server. Every answer: {ok, a, v, t, ms, lockMs, data | error}.
 
 import { SERVER_VERSION, AppError, fail, clock, todayStr } from './util.js';
-import { ensureSchema, findSession, createSession, updateSession } from './store.js';
+import { ensureSchema, findSession, findOrCreateSession, updateSession } from './store.js';
 import { authChild } from './auth.js';
 import { publicSettings } from './settings.js';
 import { generateStory } from './stories.js';
@@ -29,7 +29,7 @@ export async function handle(req, env, ctx) {
     await ensureSchema(env.DB);
     const fn = ACTIONS[action];
     if (!fn) fail('unknown_action', action);
-    const child = action === 'ping' ? null : await authChild(env, req.k);
+    const child = action === 'ping' ? null : await authChild(env, req.k, ctx);
     childId = child ? child.id : '';
     const data = await fn(env, child, req);
     out = { ok: true, a: action, v: SERVER_VERSION, t: clock.now(), ms: clock.now() - t0, lockMs: 0, data };
@@ -142,8 +142,7 @@ async function actNewStory(env, child, req) {
 
   const story = await generateStory(env, child, topic, !extra || child.extraQuestions);
 
-  const load = async () => (await findSession(env.DB, child, todayStr(), extra)) ||
-    createSession(env.DB, child, todayStr(), extra, blankState(child, extra));
+  const load = () => findOrCreateSession(env.DB, child, todayStr(), extra, () => blankState(child, extra));
   return updateSession(env.DB, load, async (sess) => {
     if (sess.state.startedAt) fail('locked', 'Reading already started');
     if (sess.story) sess.state.regenUsed++;
@@ -169,7 +168,7 @@ async function actStartPage(env, child, req) {
   if (!out.expired) {
     out.speech = null;
     try { out.speech = await issueSpeechToken(env); } catch (e) {
-      await report(env, { kind: 'error', childId: child.id, action: 'startPage token', message: `${e.code}: ${e.message}` });
+      await report(env, { kind: 'error', childId: child.id, action: 'startPage token', message: `${e.code || e.name}: ${e.message}` });
     }
   }
   return out;
@@ -262,12 +261,11 @@ async function actPractice(env, child, req) {
 }
 
 async function actFinish(env, child, req) {
-  // Summing up twice (the first answer got lost on the way) gives the same result again.
-  const done = await findSession(env.DB, child, todayStr(), !!req.extra, true);
-  if (done && done.story && done.state.finished) {
-    return { result: done.state.result, extraAllowed: !done.state.extra && done.state.result.passed && child.extraAllowed, again: true };
-  }
-  return updateSession(env.DB, loader(env, child, req.extra), async (sess) => {
+  return updateSession(env.DB, loader(env, child, req.extra, true), async (sess) => {
+    // Summing up twice (the first answer got lost, or two at once) gives the same result again.
+    if (sess && sess.story && sess.state.finished) {
+      return { result: sess.state.result, extraAllowed: !sess.state.extra && sess.state.result.passed && child.extraAllowed, again: true };
+    }
     loadActive(sess);
     const s = sess.state;
     if (s.pages.some((p) => p.best < 0)) fail('too_early', 'Not all pages were read');

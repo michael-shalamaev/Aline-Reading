@@ -1,11 +1,12 @@
 // bridge.js — talks to the existing Google Apps Script (server/Bridge.gs): settings from
-// the sheet, and rows and mails for the parent. Never on the child's waiting path.
+// the sheet, and rows and mails for the parent. Rows and mails never keep the child waiting;
+// settings only on the very first request (afterwards they are refreshed in the background).
 
 import { AppError } from './util.js';
 
 const BRIDGE_TIMEOUT_MS = 60000;
 
-export async function bridgeCall(env, action, body = {}) {
+export async function bridgeCall(env, action, body = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
   if (!env.BRIDGE_URL || !env.BRIDGE_SECRET) throw new AppError('config_missing', 'BRIDGE_URL / BRIDGE_SECRET not set');
   let res;
   try {
@@ -14,7 +15,7 @@ export async function bridgeCall(env, action, body = {}) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, secret: env.BRIDGE_SECRET, ...body }),
       redirect: 'follow',
-      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
   } catch (e) {
     throw new AppError('bridge_down', String(e));

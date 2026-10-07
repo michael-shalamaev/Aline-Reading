@@ -21,9 +21,14 @@ function actBridgeSettings(child, req) {
 /** Rows and mails, in the order the new server sends them. One failed item does not stop the rest. */
 function actBridgeReport(child, req) {
   bridgeCheck(req);
+  var cache = CacheService.getScriptCache();
   var results = (req.items || []).map(function (it) {
+    // The new server may send an item again (its answer got lost): an item already done is skipped.
+    var doneKey = 'bridge_done_' + it.id;
+    if (it.id && cache.get(doneKey)) return { id: it.id, ok: true, again: true };
     try {
       bridgeItem(it);
+      if (it.id) cache.put(doneKey, '1', 21600);
       return { id: it.id, ok: true };
     } catch (e) {
       logError(it.childId || '', 'bridge ' + it.kind, e);
@@ -43,7 +48,7 @@ function bridgeItem(it) {
   var sess = it.sess;
   switch (it.kind) {
     case 'pageAttempt':
-      logPageAttempt(child, sess, it.page, it.attemptNo, it.attempt, it.below);
+      logPageAttempt(child, sess, it.page, it.attemptNo, it.attempt, it.below); // dated by the attempt itself
       return;
     case 'session':
       logSession(child, sess, it.result);
@@ -55,11 +60,11 @@ function bridgeItem(it) {
       sendExpiredMail(child, sess, it.pagesDone);
       return;
     case 'practice':
-      withLock(function () { logPracticeResults(child, it.results || []); });
+      withLock(function () { logPracticeResults(child, it.results || [], Utilities.formatDate(new Date(it.at || Date.now()), tz(), 'yyyy-MM-dd')); });
       return;
     case 'error':
       sheet(SHEETS.errors).appendRow([
-        new Date(it.at || Date.now()), it.childId || '', String(it.action || '').slice(0, 80),
+        new Date(it.at || Date.now()), it.childId || '', String(it.action || '').slice(0, 90),
         String(it.message || '').slice(0, 600), String(it.details || '').slice(0, 4000)
       ]);
       return;

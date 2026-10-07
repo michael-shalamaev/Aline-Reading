@@ -23,7 +23,7 @@ var TYPE_HE = { om: 'הושמטה', sub: 'מילה אחרת', mis: 'הגייה',
 
 function logPageAttempt(child, sess, pageIdx, attemptNo, a, below) {
   sheet(SHEETS.pages).appendRow([
-    new Date(), child.id, sess.state.id, pageIdx + 1, attemptNo, a.n, a.acc, a.errors, a.om, a.mis, a.ins, a.hint,
+    new Date(a.at || Date.now()), child.id, sess.state.id, pageIdx + 1, attemptNo, a.n, a.acc, a.errors, a.om, a.mis, a.ins, a.hint,
     a.durSec, a.wpm, below ? 'כן' : 'לא',
     a.errWords.map(function (e) { return e.w + ' (' + TYPE_HE[e.t] + (e.said ? ': ' + e.said : '') + ')'; }).join(', ') +
       (a.extraWords && a.extraWords.length ? ' | נוספו: ' + a.extraWords.join(', ') : ''),
@@ -70,7 +70,7 @@ function updateHardWords(child, sess) {
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0]) === child.id) rowOf[normWord(data[i][1])] = i;
   }
-  var today = todayStr();
+  var today = sess.state.date || todayStr();
   var appends = [];
   keys.forEach(function (k) {
     var t = tally[k];
@@ -84,11 +84,11 @@ function updateHardWords(child, sess) {
   if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, 8).setValues(appends);
 }
 
-function logPracticeResults(child, results) {
+function logPracticeResults(child, results, day) {
   if (!results || !results.length) return;
   var sh = sheet(SHEETS.words);
   var data = sh.getDataRange().getValues();
-  var today = todayStr();
+  var today = day || todayStr();
   results.forEach(function (res) {
     var k = normWord(res.word);
     for (var i = 1; i < data.length; i++) {

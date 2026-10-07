@@ -1,29 +1,39 @@
-// settings.js — the children's settings come from the sheet (through the bridge), and are
-// kept here for 10 minutes. If the sheet cannot be reached, the last known settings are used.
+// settings.js — the children's settings come from the sheet (through the bridge).
+// They are refreshed every 10 minutes in the background: a request never waits for Google,
+// except the very first one ever. If the sheet cannot be reached, the last known settings stay.
 
-import { fail, AppError } from './util.js';
+import { fail, clock } from './util.js';
 import { kvGet, kvPut } from './store.js';
 import { bridgeCall } from './bridge.js';
 import { report } from './reports.js';
 
 export const SETTINGS_CACHE_SEC = 600;
 const KEY = 'children';
+const KEEP_SEC = 365 * 86400;
+const FIRST_TIMEOUT_MS = 20000;
 
-export async function readChildren(env) {
-  const fresh = await kvGet(env.DB, KEY);
-  if (fresh) return fresh;
+async function fetchChildren(env, timeoutMs) {
+  const data = await bridgeCall(env, 'bridgeSettings', {}, timeoutMs);
+  await kvPut(env.DB, KEY, { children: data.children, fresh: clock.now() + SETTINGS_CACHE_SEC * 1000 }, KEEP_SEC);
+  if (data.sheetUrl) await kvPut(env.DB, 'sheetUrl', data.sheetUrl, KEEP_SEC);
+  return data.children;
+}
+
+export async function readChildren(env, ctx) {
+  const kept = await kvGet(env.DB, KEY);
+  if (kept && kept.fresh > clock.now()) return kept.children;
+  if (kept) {
+    // Old but usable: answer with it now, refresh for the next request.
+    await kvPut(env.DB, KEY, { ...kept, fresh: clock.now() + 60000 }, KEEP_SEC); // one refresh at a time
+    const refresh = fetchChildren(env).catch((e) =>
+      report(env, { kind: 'error', childId: '', action: 'settings refresh (the last known are used)', message: `${e.code}: ${e.message}` }));
+    if (ctx && ctx.waitUntil) ctx.waitUntil(refresh); else await refresh;
+    return kept.children;
+  }
   try {
-    const data = await bridgeCall(env, 'bridgeSettings');
-    await kvPut(env.DB, KEY, data.children, SETTINGS_CACHE_SEC);
-    if (data.sheetUrl) await kvPut(env.DB, 'sheetUrl', data.sheetUrl, 365 * 86400);
-    return data.children;
+    return await fetchChildren(env, FIRST_TIMEOUT_MS);
   } catch (e) {
-    const stale = await kvGet(env.DB, KEY, { allowStale: true });
-    if (stale) {
-      await report(env, { kind: 'error', childId: '', action: 'settings (using the last known)', message: `${e.code}: ${e.message}` });
-      return stale;
-    }
-    if (e instanceof AppError && e.code === 'bridge_unauthorized') fail('config_missing', 'Bridge secret does not match the script');
+    if (e.code === 'bridge_unauthorized' || e.code === 'config_missing') fail('config_missing', 'The bridge to the sheet is not set up: ' + e.message);
     fail('settings_unavailable', 'Settings could not be read: ' + e.message);
   }
 }

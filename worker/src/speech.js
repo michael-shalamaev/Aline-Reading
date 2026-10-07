@@ -13,7 +13,8 @@ export async function issueSpeechToken(env) {
   if (hit) return { token: hit.token, region, ttlSec: TOKEN_LIFE_SEC - Math.floor((clock.now() - hit.at) / 1000) };
   const res = await fetch(`https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`, {
     method: 'POST',
-    headers: { 'Ocp-Apim-Subscription-Key': env.AZURE_SPEECH_KEY, 'Content-Length': '0' }
+    headers: { 'Ocp-Apim-Subscription-Key': env.AZURE_SPEECH_KEY },
+    body: ''
   });
   const text = await res.text();
   if (res.status !== 200) fail('speech_token_error', `Microsoft ${res.status}: ${text.slice(0, 200)}`);
