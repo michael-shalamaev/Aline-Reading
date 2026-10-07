@@ -2,62 +2,21 @@
 // The server runs in the in-memory mock; Microsoft is replaced by fake-speech-sdk.js.
 // Run: node tests/e2e/run.mjs   (needs Playwright; screenshots go to tests/e2e/shots/)
 
-import { readFileSync, mkdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { loadServer } from '../gas-mock.mjs';
+import { startApp, BACKEND } from './harness.mjs';
 
-const require = createRequire(import.meta.url);
-let chromium;
-try { ({ chromium } = require('playwright')); } catch { ({ chromium } = require('/opt/npm-tools/node_modules/playwright')); }
-
-const root = new URL('../../', import.meta.url);
-const shots = new URL('./shots/', import.meta.url);
-mkdirSync(shots, { recursive: true });
-
-const server = loadServer();
-server.ctx.setup();
-const code = server.book().getSheetByName('הגדרות').rows().find((r) => r[0] === 'code')[2];
-
-const TYPES = { html: 'text/html', js: 'text/javascript', css: 'text/css', json: 'application/json' };
-
-const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM || undefined });
-const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, locale: 'he-IL' });
-const errors = [];
-let cutOffOnce = false;
-page.on('pageerror', (e) => errors.push(String(e)));
-page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(m.text()); if (process.env.VERBOSE) console.log('  [page]', m.text().slice(0, 200)); });
-
-await page.route('**/*', async (route) => {
-  const url = new URL(route.request().url());
-  if (url.host === 'script.test') {
-    server.clock.now += 40000;
-    const req = JSON.parse(route.request().postData());
-    let res = server.api(req);
-    // Like the real phone saw once: the story is saved, but the answer that comes back is the ping.
-    if (req.action === 'newStory' && !cutOffOnce) { cutOffOnce = true; res = server.api({ action: 'ping' }); }
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(res) });
-  }
-  if (url.host === 'app.test') {
-    let path = url.pathname.replace(/^\//, '') || 'index.html';
-    let body = readFileSync(new URL(path, root), 'utf8');
-    if (path === 'js/config.js') body = body.replace(/SCRIPT_URL = '[^']*'/, "SCRIPT_URL = 'https://script.test/exec'");
-    return route.fulfill({ contentType: TYPES[path.split('.').pop()] || 'text/plain', body });
-  }
-  if (url.pathname.endsWith('speech.sdk.bundle-min.js')) {
-    return route.fulfill({ contentType: 'text/javascript', body: readFileSync(new URL('./fake-speech-sdk.js', import.meta.url), 'utf8') });
-  }
-  return route.abort();
+// Like the real phone saw once: the story is saved, but the answer that comes back is the ping.
+const app = await startApp({
+  timeoutMs: 60000,
+  fault: (r, n) => (r.action === 'newStory' && n === 1
+    ? { replace: () => ({ ok: true, a: 'ping', v: 'x', t: Date.now(), data: { version: 'x', time: new Date().toISOString() } }) }
+    : null)
 });
+const { page, errors } = app;
+const shot = app.shot;
+const screen = app.screen;
+console.log('server:', BACKEND);
 
-await page.addInitScript(() => {
-  window.speechSynthesis = { speak() {}, cancel() {}, getVoices: () => [], onvoiceschanged: null };
-  window.SpeechSynthesisUtterance = function () {};
-});
-
-const shot = (name) => page.screenshot({ path: new URL(name + '.png', shots).pathname, fullPage: true });
-const screen = (name) => page.waitForSelector(`[data-screen="${name}"]:not([hidden])`, { timeout: 15000 });
-
-await page.goto(`http://app.test/?k=${code}`);
+await app.open();
 await screen('topic');
 await shot('01-topic');
 
@@ -115,7 +74,7 @@ await shot('09-summary');
 
 const result = await page.textContent('#summary-body');
 console.log('summary:', result.replace(/\s+/g, ' '));
-console.log('mail:', server.mails.map((m) => m.subject));
+console.log('mail:', (await app.mails()).map((m) => m.subject));
 console.log('page errors:', errors.length ? errors : 'none');
 
 // Reload mid-day: the finished day shows its summary again.
@@ -123,5 +82,5 @@ await page.reload();
 await screen('summary');
 console.log('after reload: summary shown');
 
-await browser.close();
+await app.close();
 if (errors.length) process.exit(1);

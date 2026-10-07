@@ -1,6 +1,6 @@
 // api.js — every call to the Google Apps Script server goes through here.
 
-import { VERSION, SCRIPT_URL, API_TIMEOUT_MS, API_TIMEOUT_STORY_MS } from './config.js';
+import { VERSION, SCRIPT_URL, NEW_SERVER_URL, DEFAULT_SERVER, API_TIMEOUT_MS, API_TIMEOUT_STORY_MS } from './config.js';
 import { log } from './debug.js';
 import { reportError } from './report.js';
 
@@ -22,6 +22,27 @@ const code = (() => {
     return fromLink || '';
   }
 })();
+
+// Which server this phone talks to: ?server=new / ?server=old in the link switches it, and
+// it is remembered. Without the new server's address, it is always the old one.
+const SERVER_KEY = 'reading_server';
+export const serverName = (() => {
+  const asked = new URLSearchParams(location.search).get('server');
+  let chosen = DEFAULT_SERVER;
+  try {
+    if (asked === 'new' || asked === 'old') {
+      localStorage.setItem(SERVER_KEY, asked);
+      const url = new URL(location.href);
+      url.searchParams.delete('server');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+    chosen = asked || localStorage.getItem(SERVER_KEY) || DEFAULT_SERVER;
+  } catch {
+    chosen = asked || DEFAULT_SERVER;
+  }
+  return chosen === 'new' && NEW_SERVER_URL ? 'new' : 'old';
+})();
+const serverUrl = serverName === 'new' ? NEW_SERVER_URL : SCRIPT_URL;
 
 export class ApiError extends Error {
   constructor(code, message) {
@@ -79,10 +100,10 @@ function outboxStore(box) {
 function outboxAdd(action, payload) {
   const box = outboxLoad();
   const body = JSON.stringify(payload);
-  const same = box.find((it) => it.k === code && it.action === action && JSON.stringify(it.payload) === body);
+  const same = box.find((it) => it.k === code && it.srv === serverName && it.action === action && JSON.stringify(it.payload) === body);
   if (same) return same.id; // a retry of the same call: kept once
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  box.push({ id, k: code, action, payload });
+  box.push({ id, k: code, srv: serverName, action, payload });
   outboxStore(box);
   return id;
 }
@@ -91,7 +112,7 @@ function outboxDone(id) {
 }
 
 export function outboxSize() {
-  return outboxLoad().filter((it) => it.k === code).length;
+  return outboxLoad().filter((it) => it.k === code && (it.srv || 'old') === serverName).length;
 }
 
 // A page's start alone is not kept: if its reading is in the outbox, the start is sent again with it.
@@ -113,7 +134,7 @@ export function call(action, payload = {}) {
  * still cannot get through (kept for next time). onProgress(done, total) for the screen.
  */
 export async function sendOutbox(onProgress) {
-  const mine = outboxLoad().filter((it) => it.k === code);
+  const mine = outboxLoad().filter((it) => it.k === code && (it.srv || 'old') === serverName);
   outboxStore(outboxLoad().filter((it) => it.k === code)); // calls of another child's code are dropped
   for (let n = 0; n < mine.length; n++) {
     const it = mine[n];
@@ -155,7 +176,7 @@ async function callWithRetry(action, payload) {
 let warnedVersion = false;
 
 export async function callOnce(action, payload = {}) {
-  if (!SCRIPT_URL || SCRIPT_URL.startsWith('PASTE')) throw new ApiError('not_configured', 'SCRIPT_URL is not set');
+  if (!serverUrl || serverUrl.startsWith('PASTE')) throw new ApiError('not_configured', 'server address is not set');
   const timeout = action === 'newStory' ? API_TIMEOUT_STORY_MS : API_TIMEOUT_MS;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -165,7 +186,7 @@ export async function callOnce(action, payload = {}) {
     : action === 'clientError' ? { where: payload.where } : payload);
   let res;
   try {
-    res = await fetch(SCRIPT_URL, {
+    res = await fetch(serverUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, k: code, ...payload }),

@@ -32,7 +32,7 @@ function sendSummaryMail(child, sess, r) {
     ['תוצאה', verdict + (r.readingPassed && !r.quizPassed ? ' (בגלל שאלות ההבנה)' : '')],
     ['דיוק', r.acc + '% · ' + r.errors + ' שגיאות מתוך ' + r.words + ' מילים'],
     ['פירוט', 'הושמטו ' + r.om + ' · מילה אחרת ' + (r.sub || 0) + ' · הגייה ' + r.mis + ' · נוספו ' + r.ins + ' · רמזים ' + r.hint],
-    ['זמן', fmtTime(s.startedAt) + ' עד ' + fmtTime(Date.now()) + ' · ' + r.minutes + ' דקות, מתוכן ' + r.readMinutes + ' קריאה'],
+    ['זמן', fmtTime(s.startedAt) + ' עד ' + fmtTime(s.finishedAt || Date.now()) + ' · ' + r.minutes + ' דקות, מתוכן ' + r.readMinutes + ' קריאה'],
     ['קצב', r.wpm + ' מילים לדקה'],
     ['קריאות חוזרות', String(r.attempts - s.pages.length)],
     ['שאלות הבנה', r.quizTotal ? r.quizCorrect + ' מתוך ' + r.quizTotal : 'אין']

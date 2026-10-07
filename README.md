@@ -51,12 +51,37 @@ with a 10-minute token that the script issues.
 | `Setup.gs` | `setup`, `addChild`, `selfTest`, `testStory` |
 | `Util.gs` | Helpers, tokenizer, version |
 
+### New server (`worker/`, Cloudflare)
+
+The same actions and answers as `server/Router.gs`, so the page works with either server
+(`js/config.js`: `NEW_SERVER_URL`, `DEFAULT_SERVER`; one phone switches with `?server=new|old`).
+State lives in Cloudflare D1 (SQLite); the sheet stays the source of settings and the place of
+the parent's log, hard words, errors and mail, reached through `server/Bridge.gs` (secret-protected)
+in the background, with retries. Setup guide (Hebrew): [docs/CLOUDFLARE.md](docs/CLOUDFLARE.md).
+
+| File | Responsibility |
+| --- | --- |
+| `index.js` | Entry point, CORS, scheduled job |
+| `router.js` | One action per request |
+| `auth.js` | Code → child, rate limit |
+| `settings.js` | Settings from the sheet, cached 10 minutes, last known if the sheet is down |
+| `store.js` | D1 tables, sessions with an optimistic lock, small cached values |
+| `sessions.js` | Daily session, time window, what the phone sees |
+| `stories.js` | Gemini prompt, model fallback, validation |
+| `speech.js` | Microsoft token |
+| `scoring.js` | Counting, pass rules, best attempt |
+| `reports.js` | Rows and mails waiting for the sheet, sent in order with retries |
+| `bridge.js` | Calls to `server/Bridge.gs` |
+
+`worker/dist/worker.js` is the single file to paste into Cloudflare's editor
+(`npm run build:worker`; a test fails if it is out of date).
+
 ## Tests
 
 ```
 npm test           # unit + server: alignment, tokenizer parity, full server flows, request cost budgets
-npm run test:e2e   # system: real page in Chromium against the server code, with injected faults
-                   # (Google HTML error page, lost answers, timeouts, dropped speech), then a whole day
+npm run test:e2e   # system: real page in Chromium, with injected faults (Google HTML error page,
+                   # lost answers, timeouts, dropped speech) and a whole day — against both servers
 npm run perf       # estimated Google round-trip cost per server action
 ```
 

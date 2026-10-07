@@ -35,7 +35,7 @@ function logSession(child, sess, r) {
   var s = sess.state;
   sheet(SHEETS.log).appendRow([
     s.date, child.id, s.extra ? 'כן' : 'לא', s.topics[s.topics.length - 1] || '', sess.story.title,
-    r.words, s.pages.length, fmtTime(s.startedAt), fmtTime(Date.now()), r.minutes, r.readMinutes,
+    r.words, s.pages.length, fmtTime(s.startedAt), fmtTime(s.finishedAt || Date.now()), r.minutes, r.readMinutes,
     r.acc, r.errors, r.om, r.mis, r.ins, r.hint, r.wpm, r.attempts,
     r.quizTotal ? r.quizCorrect + '/' + r.quizTotal : '', r.passed ? 'כן' : 'לא', r.flags.join('; '), s.id, r.sub || 0
   ]);

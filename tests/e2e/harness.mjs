@@ -6,6 +6,10 @@
 import { readFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { loadServer } from '../gas-mock.mjs';
+import { loadWorker } from '../worker-harness.mjs';
+
+// Which server the page talks to: BACKEND=worker runs the same scenarios against the new server.
+export const BACKEND = process.env.BACKEND || 'gas';
 
 const require = createRequire(import.meta.url);
 let chromium;
@@ -27,9 +31,16 @@ export const GOOGLE_ERROR_PAGE = '<!DOCTYPE html><html><head><title>Error</title
  * 'after' means the server did the work and saved, but the phone does not get the answer.
  */
 export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpts = {}, timePerCallMs = 40000, realClockSkewMs = null } = {}) {
-  const server = loadServer(serverOpts);
-  server.ctx.setup();
+  let server, w = null;
+  if (BACKEND === 'worker') {
+    w = loadWorker({ ...serverOpts, rateLimit: 100000 });
+    server = w.gas;
+  } else {
+    server = loadServer(serverOpts);
+    server.ctx.setup();
+  }
   const code = server.book().getSheetByName('הגדרות').rows().find((r) => r[0] === 'code')[2];
+  const serverCall = async (req) => (w ? w.api(req) : server.api(req));
   const calls = [];
   const counts = {};
 
@@ -48,11 +59,11 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
 
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
-    if (url.host === 'script.test') {
+    if (url.host === 'script.test' || url.host === 'new.test') {
       const req = JSON.parse(route.request().postData());
       counts[req.action] = (counts[req.action] || 0) + 1;
       const f = fault(req, counts[req.action]) || {};
-      calls.push({ action: req.action, fault: f });
+      calls.push({ action: req.action, fault: f, host: url.host });
       const nav = navigations;
       if (f.delayMs) await new Promise((r) => setTimeout(r, f.delayMs));
       if (nav !== navigations) return route.abort().catch(() => {});
@@ -60,7 +71,7 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
       if (f.drop === 'before') return route.abort('connectionreset').catch(() => {});
       if (realClockSkewMs !== null) server.clock.now = Date.now() + realClockSkewMs;
       else server.clock.now += timePerCallMs;
-      const res = server.api(req);
+      const res = await serverCall(req);
       if (f.delayAfterMs) await new Promise((r) => setTimeout(r, f.delayAfterMs));
       if (f.html === 'after') return route.fulfill({ status: 200, contentType: 'text/html', body: GOOGLE_ERROR_PAGE });
       if (f.drop === 'after') return route.abort('connectionreset').catch(() => {});
@@ -71,6 +82,7 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
       let body = readFileSync(new URL(path, root), 'utf8');
       if (path === 'js/config.js') {
         body = body.replace(/SCRIPT_URL = '[^']*'/, "SCRIPT_URL = 'https://script.test/exec'")
+          .replace("NEW_SERVER_URL = ''", "NEW_SERVER_URL = 'https://new.test/exec'")
           .replace(/API_TIMEOUT_MS = \d+/, 'API_TIMEOUT_MS = ' + timeoutMs);
       }
       if (path === 'js/api.js') body = body.replace('RETRY_DELAY_MS = 1500', 'RETRY_DELAY_MS = 100');
@@ -93,8 +105,10 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
     screen: (name, timeout = 15000) => page.waitForSelector(`[data-screen="${name}"]:not([hidden])`, { timeout }),
     visible: () => page.evaluate(() => document.querySelector('[data-screen]:not([hidden])')?.dataset.screen),
     open: (extra = '') => page.goto(`http://app.test/?k=${code}${extra}`),
-    errorRows: () => server.book().getSheetByName('שגיאות').rows().slice(1),
-    session: () => server.api({ action: 'init', k: code }).data.session,
+    call: serverCall,
+    errorRows: async () => { if (w) await w.settle(); return server.book().getSheetByName('שגיאות').rows().slice(1); },
+    mails: async () => { if (w) await w.settle(); return server.mails; },
+    session: async () => (await serverCall({ action: 'init', k: code })).data.session,
     close: () => browser.close()
   };
   return app;
