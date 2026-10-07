@@ -3,7 +3,7 @@
  * word tokenizing (must stay identical to js/text.js), errors.
  */
 
-var SERVER_VERSION = '1.0.7';
+var SERVER_VERSION = '1.0.8';
 
 /** Error type the router turns into a clean {ok:false} answer for the page. */
 function AppError(code, message) {

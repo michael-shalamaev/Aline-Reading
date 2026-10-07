@@ -481,3 +481,43 @@ test('the extra words heard are kept with the attempt and shown in the pages tab
   const row = s.book().getSheetByName('עמודים').rows().at(-1);
   assert.match(row[15], /נוספו: pizza, robot/);
 });
+
+test('levels renamed once: old "בינוני" becomes "מתקדם", old "מתחילים מתקדמים" becomes "בינוני"; labels refreshed', () => {
+  const s = ready();
+  const st = s.book().getSheetByName('הגדרות');
+  const rows = st.rows();
+  const levelRow = rows.findIndex((r) => r[0] === 'level');
+  rows[levelRow][1] = 'old label';
+  rows[levelRow][2] = 'מתחילים מתקדמים';
+  s.ctx.addChild();
+  rows[levelRow][3] = 'בינוני';
+  s.props.delete('LEVELS_RENAMED'); // as in a sheet made before the rename
+  s.ctx.REQ = s.ctx.newReq(); // a new run of the script (each run starts fresh)
+  s.ctx.setup();
+  assert.equal(rows[levelRow][2], 'בינוני');
+  assert.equal(rows[levelRow][3], 'מתקדם');
+  assert.match(rows[levelRow][1], /מתחילים, בינוני או מתקדם/);
+  s.ctx.setup(); // a second run changes nothing
+  assert.equal(rows[levelRow][2], 'בינוני');
+  assert.equal(rows[levelRow][3], 'מתקדם');
+});
+
+test('a new sheet keeps the new level names; age is a setting and reaches the story prompt', () => {
+  const s = ready();
+  const rows = s.book().getSheetByName('הגדרות').rows();
+  assert.equal(rows.find((r) => r[0] === 'level')[2], 'בינוני');
+  assert.equal(rows.find((r) => r[0] === 'age')[2], 10);
+  rows.find((r) => r[0] === 'age')[2] = 7;
+  s.ctx.clearSettingsCache();
+  const p = s.ctx.storyPrompt(s.ctx.readChildren()[0], 'x', true);
+  assert.match(p, /about 7 years old/);
+  assert.match(p, /CEFR A2/);
+});
+
+test('a sheet not yet updated with the old name "מתחילים מתקדמים" still gets the middle level', () => {
+  const s = ready();
+  const rows = s.book().getSheetByName('הגדרות').rows();
+  rows.find((r) => r[0] === 'level')[2] = 'מתחילים מתקדמים';
+  s.ctx.clearSettingsCache();
+  assert.match(s.ctx.storyPrompt(s.ctx.readChildren()[0], 'x', true), /CEFR A2/);
+});
