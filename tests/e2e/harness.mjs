@@ -42,6 +42,10 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
     if (process.env.VERBOSE) console.log('  [page]', m.text().slice(0, 240));
   });
 
+  // A request still waiting when the page is closed/reloaded never reaches the server (like a real phone).
+  let navigations = 0;
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations++; });
+
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.host === 'script.test') {
@@ -49,7 +53,9 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
       counts[req.action] = (counts[req.action] || 0) + 1;
       const f = fault(req, counts[req.action]) || {};
       calls.push({ action: req.action, fault: f });
+      const nav = navigations;
       if (f.delayMs) await new Promise((r) => setTimeout(r, f.delayMs));
+      if (nav !== navigations) return route.abort().catch(() => {});
       if (f.html === 'before') return route.fulfill({ status: 200, contentType: 'text/html', body: GOOGLE_ERROR_PAGE });
       if (f.drop === 'before') return route.abort('connectionreset').catch(() => {});
       if (realClockSkewMs !== null) server.clock.now = Date.now() + realClockSkewMs;

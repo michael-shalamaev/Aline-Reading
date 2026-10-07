@@ -427,3 +427,28 @@ test('the app is closed while summing up: the server has already summed the stor
     await app.close();
   } catch (e) { await app.close(); throw e; }
 });
+
+test('Google very slow, the app closed with readings still waiting: sent on the next open, nothing lost', async () => {
+  let slow = true;
+  const app = await startApp({
+    timeoutMs: 30000,
+    fault: (r) => (slow && ['startPage', 'submitPage', 'answer'].includes(r.action) ? { delayMs: 20000 } : null)
+  });
+  try {
+    await toFirstPage(app);
+    await readPage(app);           // page 1: start and save are stuck waiting for Google
+    await answer(app, 1);
+    await app.page.click('.next');
+    await app.screen('prep');
+    await readPage(app);           // page 2 read too, all still waiting
+    assert.equal(app.session().pages[0].attempts, 0, 'nothing reached the server yet');
+    slow = false;
+    await app.open();              // closed and opened again
+    await app.screen('question', 30000);
+    const s = app.session();
+    assert.equal(s.pages[0].attempts, 1, 'page 1 saved from the outbox');
+    assert.equal(s.pages[1].attempts, 1, 'page 2 saved from the outbox');
+    assert.deepEqual(s.pages[0].answered, { choice: 1, correct: true });
+    assert.match(await app.page.textContent('#q-label'), /עמוד 2/, 'continues at page 2\'s question');
+  } finally { await app.close(); }
+});
