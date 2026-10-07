@@ -1,6 +1,6 @@
 // config.js — the only place with addresses and tuning numbers.
 
-export const VERSION = '1.0.8';
+export const VERSION = '1.0.9';
 
 // The Google Apps Script web app address (ends with /exec). Filled in during setup.
 export const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxyzKHmLY0kweEtL40FlUtBQxuHbUz0KkN08DhkoM6_o35-WIkE-hhev2rcR9W1Cbmp/exec';

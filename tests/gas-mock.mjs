@@ -88,7 +88,8 @@ function fmtDate(d, tz, fmt) {
 function fakeStory(prompt, opts) {
   if (!/exactly (\d+) pages/.test(prompt)) return 'OK';
   const pages = Number(prompt.match(/exactly (\d+) pages/)[1]);
-  const per = Number(prompt.match(/about (\d+) words each/)[1]);
+  const factor = opts.lengths && opts.lengths.length ? opts.lengths.shift() : 1;
+  const per = Math.round(Number(prompt.match(/about (\d+) words each/)[1]) * factor);
   const base = 'Mia found a tiny dragon in the garden and it wanted to eat warm pizza with her friends';
   const words = base.split(' ');
   const mk = (k) => Array.from({ length: per }, (_, i) => words[(i + k) % words.length]).join(' ') + '.';

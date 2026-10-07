@@ -521,3 +521,26 @@ test('a sheet not yet updated with the old name "מתחילים מתקדמים" 
   s.ctx.clearSettingsCache();
   assert.match(s.ctx.storyPrompt(s.ctx.readChildren()[0], 'x', true), /CEFR A2/);
 });
+
+test('story length: within 15% is taken at once; further off, one more story and the closer one is kept', () => {
+  const geminiCalls = (s) => s.fetches.filter((f) => f.startsWith('model:')).length;
+  let s = ready({ lengths: [1.1] });
+  let r = s.k({ action: 'newStory', topic: 'dragons' });
+  assert.equal(geminiCalls(s), 1);
+  assert.equal(r.data.story.wordCount, 440);
+
+  s = ready({ lengths: [0.8, 1.0] });
+  r = s.k({ action: 'newStory', topic: 'dragons' });
+  assert.equal(geminiCalls(s), 2, 'asked again');
+  assert.equal(r.data.story.wordCount, 400);
+
+  s = ready({ lengths: [0.75, 0.65] });
+  r = s.k({ action: 'newStory', topic: 'dragons' });
+  assert.equal(r.data.story.wordCount, 300, 'the closer of two off stories');
+});
+
+test('the prompt gives each page a word range', () => {
+  const s = ready();
+  const p = s.ctx.storyPrompt(s.ctx.readChildren()[0], 'x', true);
+  assert.match(p, /between 72 and 88 words/);
+});

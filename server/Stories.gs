@@ -97,6 +97,8 @@ function storyPrompt(child, topic, withQuestions) {
     'The story should suit readers about ' + child.age + ' years old: interests, characters and humor for that age.',
     'English level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['בינוני']),
     'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each (total about ' + child.words + ' words).',
+    'Length matters: every page must have between ' + Math.round(perPage * 0.9) + ' and ' + Math.round(perPage * 1.1) +
+      ' words. Count the words of each page before answering, and add or remove sentences until it fits.',
     'Split pages at natural points. Each page is one to three paragraphs separated by a blank line.',
     '',
     'Reading-aloud rules, very important:',
@@ -116,12 +118,22 @@ function storyPrompt(child, topic, withQuestions) {
 }
 
 /** Calls Gemini and returns a checked story object. A bad story is retried once. */
+var LENGTH_TOLERANCE = 0.15;
+
 function generateStory(child, topic, withQuestions) {
   var lastErr = null;
+  var closest = null;
   for (var attempt = 1; attempt <= 2; attempt++) {
     try {
       var story = callGemini(storyPrompt(child, topic, withQuestions));
-      return validateStory(story, child);
+      var ok = validateStory(story, child);
+      // Gemini is not exact at counting words: within 15% of the setting is accepted;
+      // further off, one more story is asked for and the closer of the two is kept.
+      var off = Math.abs(ok.wordCount - child.words) / child.words;
+      if (off <= LENGTH_TOLERANCE || attempt === 2) return closest && closest.off < off ? closest.story : ok;
+      closest = { story: ok, off: off };
+      logError(child.id, 'generateStory#' + attempt, new AppError('length_off', 'Length ' + ok.wordCount + ' instead of ' + child.words + ', asking again'));
+      continue;
     } catch (e) {
       lastErr = e;
       logError(child.id, 'generateStory#' + attempt, e);
@@ -129,6 +141,7 @@ function generateStory(child, topic, withQuestions) {
       if (e.code === 'gemini_busy' || e.code === 'topic_blocked') break;
     }
   }
+  if (closest) return closest.story;
   throw lastErr;
 }
 
