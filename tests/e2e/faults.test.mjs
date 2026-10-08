@@ -5,28 +5,28 @@ import assert from 'node:assert/strict';
 import { startApp, toFirstPage, readPage } from './harness.mjs';
 import { tokenize } from '../../js/text.js';
 
-const attemptsOf = (app, i) => app.session().pages[i].attempts;
+const attemptsOf = async (app, i) => (await app.session()).pages[i].attempts;
 const savedOk = (app) => app.page.waitForFunction(() =>
   !document.querySelector('#after-result').disabled && document.querySelector('#save-state').textContent === '', null, { timeout: 15000 });
 /** Waits (up to 15 s) until the server's state satisfies check. */
 async function until(check, what) {
   for (let t = 0; t < 150; t++) {
-    if (check()) return;
+    if (await check()) return;
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.fail('timed out waiting for: ' + what);
 }
-const phoneRows = (app) => app.errorRows().filter((r) => String(r[2]).startsWith('טלפון'));
+const phoneRows = async (app) => (await app.errorRows()).filter((r) => String(r[2]).startsWith('טלפון'));
 
 test('the real incident: reading saved, but Google answered with its HTML page — retried, counted once, reported', async () => {
   const app = await startApp({ fault: (r, n) => (r.action === 'submitPage' && n === 1 ? { html: 'after' } : null) });
   try {
     await toFirstPage(app);
     await readPage(app);
-    await until(() => attemptsOf(app, 0) === 1, 'saved');
+    await until(async () => (await attemptsOf(app, 0)) === 1, 'saved');
     await new Promise((r) => setTimeout(r, 500));
-    assert.equal(attemptsOf(app, 0), 1, 'the retry did not count the page twice');
-    const row = phoneRows(app).find((r) => r[2] === 'טלפון: submitPage (retried)');
+    assert.equal((await attemptsOf(app, 0)), 1, 'the retry did not count the page twice');
+    const row = (await phoneRows(app)).find((r) => r[2] === 'טלפון: submitPage (retried)');
     assert.ok(row, 'reported to the errors tab');
     assert.match(row[3], /^server_html/);
     assert.match(row[4], /title "Error"/, 'the details say what Google sent');
@@ -44,7 +44,7 @@ test('saving keeps trying in the background while she goes on; counted once', as
     await app.page.click('#after-result');
     await app.screen('question');
     await until(() => app.counts.submitPage >= 4, 'tried until the answer came through');
-    assert.equal(attemptsOf(app, 0), 1);
+    assert.equal((await attemptsOf(app, 0)), 1);
   } finally { await app.close(); }
 });
 
@@ -62,10 +62,10 @@ test('going on before the save is done: the next page waits its turn, nothing ou
     await app.page.click('.next');
     await app.screen('prep');
     await readPage(app);
-    await until(() => attemptsOf(app, 1) === 1, 'page 2 saved');
-    assert.equal(attemptsOf(app, 0), 1);
-    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true });
-    assert.equal(phoneRows(app).length, 0, 'no errors at all');
+    await until(async () => (await attemptsOf(app, 1)) === 1, 'page 2 saved');
+    assert.equal((await attemptsOf(app, 0)), 1);
+    assert.deepEqual((await app.session()).pages[0].answered, { choice: 1, correct: true });
+    assert.equal((await phoneRows(app)).length, 0, 'no errors at all');
   } finally { await app.close(); }
 });
 
@@ -101,8 +101,8 @@ test('starting a page fails twice: error screen, "try again" asks the server and
     await app.screen('prep');
     assert.equal(app.counts.init, inits + 1, 'went back to the server for the state');
     await readPage(app);
-    await until(() => attemptsOf(app, 0) === 1, 'saved');
-    const where = phoneRows(app).map((r) => r[2]);
+    await until(async () => (await attemptsOf(app, 0)) === 1, 'saved');
+    const where = (await phoneRows(app)).map((r) => r[2]);
     assert.ok(where.includes('טלפון: startPage'), 'the error screen itself was reported: ' + where);
   } finally { await app.close(); }
 });
@@ -112,14 +112,14 @@ test('out of step (page already read elsewhere / answer lost): no error screen, 
   try {
     await toFirstPage(app);
     // Page 1 is read and saved, but the phone never heard back.
-    app.server.api({ action: 'startPage', page: 0, k: app.code });
-    const words = tokenize(app.session().story.pages[0].text).map(() => 'ok');
-    app.server.api({ action: 'submitPage', page: 0, k: app.code, words, insertions: 0 });
-    assert.equal(app.session().pages[0].attempts, 1);
+    await app.call({ action: 'startPage', page: 0, k: app.code });
+    const words = tokenize((await app.session()).story.pages[0].text).map(() => 'ok');
+    await app.call({ action: 'submitPage', page: 0, k: app.code, words, insertions: 0 });
+    assert.equal((await app.session()).pages[0].attempts, 1);
     await app.page.click('#go-read');
     await app.screen('question');
     assert.notEqual(await app.visible(), 'error');
-    const row = phoneRows(app).find((r) => /resync/.test(r[2]));
+    const row = (await phoneRows(app)).find((r) => /resync/.test(r[2]));
     assert.ok(row && /page_not_allowed/.test(row[3]), 'reported as a resync');
   } finally { await app.close(); }
 });
@@ -132,9 +132,9 @@ test('slow server: first try times out, second works; the page counts once', asy
   try {
     await toFirstPage(app);
     await readPage(app);
-    await until(() => attemptsOf(app, 0) === 1, 'saved');
+    await until(async () => (await attemptsOf(app, 0)) === 1, 'saved');
     assert.equal(app.counts.startPage, 2);
-    assert.equal(attemptsOf(app, 0), 1);
+    assert.equal((await attemptsOf(app, 0)), 1);
   } finally { await app.close(); }
 });
 
@@ -143,10 +143,10 @@ test('answer lost every time, the app is closed and opened again: continues at t
   try {
     await toFirstPage(app);
     await readPage(app);
-    await until(() => attemptsOf(app, 0) === 1, 'the server has it, though the phone never heard');
+    await until(async () => (await attemptsOf(app, 0)) === 1, 'the server has it, though the phone never heard');
     await app.open();
     await app.screen('question');
-    assert.equal(attemptsOf(app, 0), 1);
+    assert.equal((await attemptsOf(app, 0)), 1);
   } finally { await app.close(); }
 });
 
@@ -162,8 +162,8 @@ test('microphone: listens at once, without waiting for a slow server; the readin
     const waited = Date.now() - t0;
     assert.ok(waited < 1500, `mic ready after ${waited}ms with a 5000ms server`);
     await app.screen('result');
-    await until(() => attemptsOf(app, 0) === 1, 'saved after the slow start');
-    assert.ok(app.session().pages[0].best.durSec >= 1, 'duration measured on the phone');
+    await until(async () => (await attemptsOf(app, 0)) === 1, 'saved after the slow start');
+    assert.ok((await app.session()).pages[0].best.durSec >= 1, 'duration measured on the phone');
   } finally { await app.close(); }
 });
 
@@ -174,7 +174,7 @@ test('the server cannot start the page while she already reads: listening stops,
     await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [], perWordMs: 300 }; });
     await app.page.click('#go-read');
     await app.screen('error');
-    assert.equal(attemptsOf(app, 0), 0);
+    assert.equal((await attemptsOf(app, 0)), 0);
   } finally { await app.close(); }
 });
 
@@ -187,7 +187,7 @@ test('Microsoft drops the connection mid-page: the child is told, and it is repo
     await app.page.waitForFunction(() => /נקטעה/.test(document.querySelector('#mic-state').textContent));
     await app.shot('f3-speech-dropped');
     await new Promise((r) => setTimeout(r, 400));
-    assert.ok(phoneRows(app).some((r) => r[2] === 'טלפון: reading: speech stopped'));
+    assert.ok((await phoneRows(app)).some((r) => r[2] === 'טלפון: reading: speech stopped'));
   } finally { await app.close(); }
 });
 
@@ -203,11 +203,11 @@ test('an error report that could not be sent waits on the phone and goes later',
     await toFirstPage(app);
     await app.page.click('#go-read');
     await app.screen('error');
-    assert.equal(phoneRows(app).length, 0, 'not sent yet');
+    assert.equal((await phoneRows(app)).length, 0, 'not sent yet');
     await app.page.click('#error-retry');
     await app.screen('preview'); // the page never started on the server, so back to the story preview
     await new Promise((r) => setTimeout(r, 800));
-    assert.ok(phoneRows(app).length >= 1, 'sent after the next successful start');
+    assert.ok((await phoneRows(app)).length >= 1, 'sent after the next successful start');
   } finally { await app.close(); }
 });
 
@@ -232,7 +232,7 @@ test('questions: right/wrong shows at once even when the server takes 6 seconds;
     await app.page.click('.next');
     await app.screen('prep');
     await new Promise((r) => setTimeout(r, 6500));
-    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true }, 'the server has it');
+    assert.deepEqual((await app.session()).pages[0].answered, { choice: 1, correct: true }, 'the server has it');
   } finally { await app.close(); }
 });
 
@@ -254,7 +254,7 @@ test('an answer whose every save fails goes along with summing up: not asked aga
       await app.page.click('.next');
     }
     await app.screen('summary', 40000);
-    assert.deepEqual(app.session().pages[0].answered, { choice: 1, correct: true });
+    assert.deepEqual((await app.session()).pages[0].answered, { choice: 1, correct: true });
   } finally { await app.close(); }
 });
 
@@ -263,13 +263,13 @@ test('reading "Natasha" instead of "Mia": marked as another word, one error, kin
   try {
     await toFirstPage(app);
     await readPage(app, { skip: [3], mis: [], replace: { 0: 'Natasha' } });
-    await until(() => attemptsOf(app, 0) === 1, 'saved');
+    await until(async () => (await attemptsOf(app, 0)) === 1, 'saved');
     const cls = await app.page.$eval('#result-text .w[data-i="0"]', (e) => e.className);
     assert.match(cls, /st-sub/);
     assert.match(await app.page.$eval('#result-text .w[data-i="3"]', (e) => e.className), /st-om/);
     assert.equal(await app.page.textContent('#result-kinds'), '1 דילוג · 1 מילה אחרת');
     await app.shot('f4-another-word');
-    const a = app.session().pages[0].best;
+    const a = (await app.session()).pages[0].best;
     assert.equal(a.sub, 1);
     assert.equal(a.errors, 2);
   } finally { await app.close(); }
@@ -281,20 +281,20 @@ test('summing up: Google returns its error page though the story was finished �
     await toFirstPage(app);
     // Everything but the last question is done (as if read on this phone earlier).
     const k = app.code;
-    const st = app.session().story;
-    st.pages.forEach((pg, i) => {
-      app.server.api({ action: 'startPage', page: i, k });
-      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
-      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
-    });
-    [0, 1].forEach((f) => app.server.api({ action: 'answer', kind: 'final', index: f, choice: 1, k }));
+    const st = (await app.session()).story;
+    for (const [i, pg] of st.pages.entries()) {
+      await app.call({ action: 'startPage', page: i, k });
+      await app.call({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      await app.call({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    }
+    for (const f of [0, 1]) await app.call({ action: 'answer', kind: 'final', index: f, choice: 1, k });
     await app.open();
     await app.screen('question');
     await app.page.click('.option[data-i="1"]');
     await app.page.waitForSelector('.next:not([hidden])');
     await app.page.click('.next');
     await app.screen('summary', 20000);
-    assert.equal(app.server.mails.length, 1, 'one mail, not two');
+    assert.equal((await app.mails()).length, 1, 'one mail, not two');
   } finally { await app.close(); }
 });
 
@@ -327,12 +327,12 @@ test('final answers that failed to save are sent again before summing up; the qu
   try {
     await toFirstPage(app);
     const k = app.code;
-    const st = app.session().story;
-    st.pages.forEach((pg, i) => {
-      app.server.api({ action: 'startPage', page: i, k });
-      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
-      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
-    });
+    const st = (await app.session()).story;
+    for (const [i, pg] of st.pages.entries()) {
+      await app.call({ action: 'startPage', page: i, k });
+      await app.call({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      await app.call({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    }
     await app.open();
     const asked = [];
     for (let f = 0; f < 3; f++) {
@@ -344,7 +344,7 @@ test('final answers that failed to save are sent again before summing up; the qu
     }
     await app.screen('summary', 40000);
     assert.equal(asked.length, 3);
-    assert.ok(app.session().finalAnswers.every((a) => a && a.choice === 1));
+    assert.ok((await app.session()).finalAnswers.every((a) => a && a.choice === 1));
   } finally { await app.close(); }
 });
 
@@ -366,18 +366,18 @@ test('a topic Gemini refuses: back to choosing a topic with a clear message, the
 
 test('Google hands back the answer to an empty request (a ping) instead of summing up: retried, summary shows', async () => {
   const app = await startApp({
-    fault: (r, n) => (r.action === 'finish' && n === 1 ? { replace: () => app.server.api({ action: 'ping' }) } : null)
+    fault: (r, n) => (r.action === 'finish' && n === 1 ? { replace: () => ({ ok: true, a: 'ping', v: 'x', t: Date.now(), data: { version: 'x', time: new Date().toISOString() } }) } : null)
   });
   try {
     await toFirstPage(app);
     const k = app.code;
-    const st = app.session().story;
-    st.pages.forEach((pg, i) => {
-      app.server.api({ action: 'startPage', page: i, k });
-      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
-      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
-    });
-    [0, 1].forEach((f) => app.server.api({ action: 'answer', kind: 'final', index: f, choice: 1, k }));
+    const st = (await app.session()).story;
+    for (const [i, pg] of st.pages.entries()) {
+      await app.call({ action: 'startPage', page: i, k });
+      await app.call({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      await app.call({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    }
+    for (const f of [0, 1]) await app.call({ action: 'answer', kind: 'final', index: f, choice: 1, k });
     await app.open();
     await app.screen('question');
     await app.page.click('.option[data-i="1"]');
@@ -385,7 +385,7 @@ test('Google hands back the answer to an empty request (a ping) instead of summi
     await app.page.click('.next');
     await app.screen('summary', 20000);
     assert.match(await app.page.textContent('#summary-body'), /דיוק/);
-    assert.ok(phoneRows(app).some((r) => /wrong_answer/.test(r[3])), 'reported');
+    assert.ok((await phoneRows(app)).some((r) => /wrong_answer/.test(r[3])), 'reported');
     assert.deepEqual(app.errors, []);
   } finally { await app.close(); }
 });
@@ -395,7 +395,7 @@ test('reading a phrase again is no error; words not in the text are listed under
   try {
     await toFirstPage(app);
     // After word 7 she goes back and reads words 4-7 again, and later says two words that are not in the text.
-    const ref = tokenize(app.session().story.pages[0].text).map((w) => w.toLowerCase());
+    const ref = tokenize((await app.session()).story.pages[0].text).map((w) => w.toLowerCase());
     await readPage(app, { skip: [], mis: [], insert: { 7: ref.slice(4, 8), 20: ['banana', 'robot'] } });
     assert.equal(await app.page.textContent('#result-kinds'), '2 מילים נוספות');
     assert.match(await app.page.textContent('#result-extra'), /banana, robot/);
@@ -408,13 +408,13 @@ test('the app is closed while summing up: the server has already summed the stor
   try {
     await toFirstPage(app);
     const k = app.code;
-    const st = app.session().story;
-    st.pages.forEach((pg, i) => {
-      app.server.api({ action: 'startPage', page: i, k });
-      app.server.api({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
-      app.server.api({ action: 'answer', kind: 'page', page: i, choice: 1, k });
-    });
-    [0, 1].forEach((f) => app.server.api({ action: 'answer', kind: 'final', index: f, choice: 1, k }));
+    const st = (await app.session()).story;
+    for (const [i, pg] of st.pages.entries()) {
+      await app.call({ action: 'startPage', page: i, k });
+      await app.call({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'ok'), insertions: 0, attemptId: 'x' + i });
+      await app.call({ action: 'answer', kind: 'page', page: i, choice: 1, k });
+    }
+    for (const f of [0, 1]) await app.call({ action: 'answer', kind: 'final', index: f, choice: 1, k });
     await app.open();
     await app.screen('question');
     await app.page.click('.option[data-i="1"]');
@@ -422,8 +422,49 @@ test('the app is closed while summing up: the server has already summed the stor
     await app.page.click('.next');
     await app.screen('loading'); // "מסכמים…": the summing-up request never gets through
     await new Promise((r) => setTimeout(r, 500));
-    assert.equal(app.session().finished, true, 'summed up by the last answer');
-    assert.equal(app.server.mails.length, 1);
+    assert.equal((await app.session()).finished, true, 'summed up by the last answer');
+    assert.equal((await app.mails()).length, 1);
     await app.close();
   } catch (e) { await app.close(); throw e; }
+});
+
+test('Google very slow, the app closed with readings still waiting: sent on the next open, nothing lost', async () => {
+  let slow = true;
+  const app = await startApp({
+    timeoutMs: 30000,
+    fault: (r) => (slow && ['startPage', 'submitPage', 'answer'].includes(r.action) ? { delayMs: 20000 } : null)
+  });
+  try {
+    await toFirstPage(app);
+    await readPage(app);           // page 1: start and save are stuck waiting for Google
+    await answer(app, 1);
+    await app.page.click('.next');
+    await app.screen('prep');
+    await readPage(app);           // page 2 read too, all still waiting
+    assert.equal((await app.session()).pages[0].attempts, 0, 'nothing reached the server yet');
+    slow = false;
+    await app.open();              // closed and opened again
+    await app.screen('question', 30000);
+    const s = (await app.session());
+    assert.equal(s.pages[0].attempts, 1, 'page 1 saved from the outbox');
+    assert.equal(s.pages[1].attempts, 1, 'page 2 saved from the outbox');
+    assert.deepEqual(s.pages[0].answered, { choice: 1, correct: true });
+    assert.match(await app.page.textContent('#q-label'), /עמוד 2/, 'continues at page 2\'s question');
+  } finally { await app.close(); }
+});
+
+test('one phone can switch servers with its link (remembered); the others stay on the default', async () => {
+  const app = await startApp();
+  try {
+    await app.open('&server=new');
+    await app.screen('topic');
+    assert.equal(app.calls.at(-1).host, 'new.test');
+    assert.doesNotMatch(app.page.url(), /server=/, 'the switch is taken out of the address');
+    await app.page.goto('http://app.test/');
+    await app.screen('topic');
+    assert.equal(app.calls.at(-1).host, 'new.test', 'remembered');
+    await app.page.goto('http://app.test/?server=old');
+    await app.screen('topic');
+    assert.equal(app.calls.at(-1).host, 'script.test');
+  } finally { await app.close(); }
 });

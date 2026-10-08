@@ -2,7 +2,7 @@
 // hands over to the next. All server calls go through api.js, all speech through speech.js.
 
 import { VERSION, AUTO_STOP_AFTER_LAST_WORD_MS, MAX_PAGE_MS } from './config.js';
-import { call, hasCode, ApiError, serverNow } from './api.js';
+import { call, hasCode, ApiError, serverNow, sendOutbox, outboxSize } from './api.js';
 import { state, story, pageCount, nextStep } from './state.js';
 import { tokenize } from './text.js';
 import { alignPage, followPosition, summarize, pageBelow } from './scoring.js';
@@ -108,6 +108,11 @@ async function boot() {
   if (!hasCode()) return showError(new ApiError('unauthorized'));
   loading('טוענים…');
   try {
+    // Readings and answers from last time that never reached the server go first.
+    if (outboxSize()) {
+      log('ui', `outbox: ${outboxSize()} calls from last time`);
+      await sendOutbox((done, total) => loading(`שומרים את מה שנקרא בפעם הקודמת… (${done + 1} מתוך ${total})`));
+    }
     const data = await call('init');
     state.child = data.child;
     $('version').textContent = `v${VERSION} · שרת ${data.version}`;
@@ -378,12 +383,18 @@ async function readingScreen(i, t0, started) {
 
     // One id per reading: if the answer is lost on the way, sending again does not count twice.
     const attemptId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const payload = { page: i, extra: state.extra, words: statuses, insertions, said, extraWords, attemptId, durSec };
     const submit = async () => {
-      // The page must be started on the server before its reading can be saved.
-      // If that first start never reached it, start it again now (the reading itself is done).
-      const s0 = await started.catch(() => call('startPage', { page: i, extra: state.extra }));
-      if (s0.expired) return s0;
-      return call('submitPage', { page: i, extra: state.extra, words: statuses, insertions, said, extraWords, attemptId, durSec });
+      // Sent at once (it waits in line behind the page's start, and is kept on the phone until
+      // the server has it). If that start never reached the server, start the page again first.
+      try {
+        return await call('submitPage', payload);
+      } catch (e) {
+        if (e.code !== 'page_not_started') throw e;
+        const s0 = await call('startPage', { page: i, extra: state.extra });
+        if (s0.expired) return s0;
+        return call('submitPage', payload);
+      }
     };
     const save = async () => {
       resultSaving('saving');

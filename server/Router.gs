@@ -13,7 +13,10 @@ var ACTIONS = {
   answer: actAnswer,
   practice: actPractice,
   finish: actFinish,
-  clientError: actClientError
+  clientError: actClientError,
+  // Wrapped: Bridge.gs may load after this file (Apps Script does not promise an order).
+  bridgeSettings: function (child, req) { return actBridgeSettings(child, req); },
+  bridgeReport: function (child, req) { return actBridgeReport(child, req); }
 };
 
 function doGet(e) {
@@ -40,7 +43,8 @@ function handle(req) {
   try {
     var fn = ACTIONS[action];
     if (!fn) fail('unknown_action', action);
-    var child = action === 'ping' ? null : authChild(req.k);
+    // The bridge (Bridge.gs) has its own secret instead of a child's code.
+    var child = action === 'ping' || action === 'bridgeSettings' || action === 'bridgeReport' ? null : authChild(req.k);
     childId = child ? child.id : '';
     var data = fn(child, req);
     out = { ok: true, a: action, v: SERVER_VERSION, t: Date.now(), ms: Date.now() - REQ.t0, lockMs: REQ.lockWaitMs, data: data };
@@ -276,6 +280,7 @@ function closeStory(child, sess) {
   var r = finalResult(child, sess);
   s.result = r;
   s.finished = true;
+  s.finishedAt = Date.now();
   saveSession(sess);
   return function () {
     try { logSession(child, sess, r); } catch (e) { logError(child.id, 'logSession', e); }

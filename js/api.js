@@ -1,6 +1,6 @@
 // api.js — every call to the Google Apps Script server goes through here.
 
-import { VERSION, SCRIPT_URL, API_TIMEOUT_MS, API_TIMEOUT_STORY_MS } from './config.js';
+import { VERSION, SCRIPT_URL, NEW_SERVER_URL, DEFAULT_SERVER, API_TIMEOUT_MS, API_TIMEOUT_STORY_MS } from './config.js';
 import { log } from './debug.js';
 import { reportError } from './report.js';
 
@@ -22,6 +22,27 @@ const code = (() => {
     return fromLink || '';
   }
 })();
+
+// Which server this phone talks to: ?server=new / ?server=old in the link switches it, and
+// it is remembered. Without the new server's address, it is always the old one.
+const SERVER_KEY = 'reading_server';
+export const serverName = (() => {
+  const asked = new URLSearchParams(location.search).get('server');
+  let chosen = DEFAULT_SERVER;
+  try {
+    if (asked === 'new' || asked === 'old') {
+      localStorage.setItem(SERVER_KEY, asked);
+      const url = new URL(location.href);
+      url.searchParams.delete('server');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+    chosen = asked || localStorage.getItem(SERVER_KEY) || DEFAULT_SERVER;
+  } catch {
+    chosen = asked || DEFAULT_SERVER;
+  }
+  return chosen === 'new' && NEW_SERVER_URL ? 'new' : 'old';
+})();
+const serverUrl = serverName === 'new' ? NEW_SERVER_URL : SCRIPT_URL;
 
 export class ApiError extends Error {
   constructor(code, message) {
@@ -62,11 +83,79 @@ const RETRY_DELAY_MS = 1500;
 const IN_ORDER = new Set(['startPage', 'submitPage', 'answer', 'practice', 'finish']);
 let queue = Promise.resolve();
 
+/*
+ * The outbox: every such call is also written on the phone until the server has it.
+ * If the app is closed while Google is slow and calls are still waiting, nothing is lost:
+ * the next time the app opens, they are sent first, in the same order (sendOutbox).
+ * All of them are safe to send twice (attemptId, first answer wins, repeatable finish).
+ */
+const OUTBOX_KEY = 'reading_outbox';
+
+function outboxLoad() {
+  try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]'); } catch { return []; }
+}
+function outboxStore(box) {
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(box)); } catch { /* private mode: in memory only */ }
+}
+function outboxAdd(action, payload) {
+  const box = outboxLoad();
+  const body = JSON.stringify(payload);
+  const same = box.find((it) => it.k === code && it.srv === serverName && it.action === action && JSON.stringify(it.payload) === body);
+  if (same) return same.id; // a retry of the same call: kept once
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  box.push({ id, k: code, srv: serverName, action, payload });
+  outboxStore(box);
+  return id;
+}
+function outboxDone(id) {
+  outboxStore(outboxLoad().filter((it) => it.id !== id));
+}
+
+export function outboxSize() {
+  return outboxLoad().filter((it) => it.k === code && (it.srv || 'old') === serverName).length;
+}
+
+// A page's start alone is not kept: if its reading is in the outbox, the start is sent again with it.
+const KEPT = new Set(['submitPage', 'answer', 'practice', 'finish']);
+
 export function call(action, payload = {}) {
   if (!IN_ORDER.has(action)) return callWithRetry(action, payload);
-  const p = queue.then(() => callWithRetry(action, payload));
+  const id = KEPT.has(action) ? outboxAdd(action, payload) : null;
+  const p = queue.then(() => callWithRetry(action, payload)).then(
+    (res) => { if (id) outboxDone(id); return res; },
+    (e) => { if (id && !RETRY_ON.has(e.code)) outboxDone(id); throw e; } // a clear answer from the server ends it too
+  );
   queue = p.catch(() => {});
   return p;
+}
+
+/**
+ * Sends what an earlier visit left in the outbox, in order. Stops at the first call that
+ * still cannot get through (kept for next time). onProgress(done, total) for the screen.
+ */
+export async function sendOutbox(onProgress) {
+  const mine = outboxLoad().filter((it) => it.k === code && (it.srv || 'old') === serverName);
+  outboxStore(outboxLoad().filter((it) => it.k === code)); // calls of another child's code are dropped
+  for (let n = 0; n < mine.length; n++) {
+    const it = mine[n];
+    onProgress?.(n, mine.length);
+    try {
+      try {
+        await callWithRetry(it.action, it.payload);
+      } catch (e) {
+        if (it.action !== 'submitPage' || e.code !== 'page_not_started') throw e;
+        // The page's start never reached the server either: start it, then save the reading.
+        await callWithRetry('startPage', { page: it.payload.page, extra: it.payload.extra });
+        await callWithRetry(it.action, it.payload);
+      }
+      log('api', `outbox: ${it.action} sent`);
+    } catch (e) {
+      if (RETRY_ON.has(e.code)) { log('api', `outbox: ${it.action} still not through, kept`); return false; }
+      log('api', `outbox: ${it.action} answered ${e.code}, dropped`); // already done, or no longer possible
+    }
+    outboxDone(it.id);
+  }
+  return true;
 }
 
 async function callWithRetry(action, payload) {
@@ -87,7 +176,7 @@ async function callWithRetry(action, payload) {
 let warnedVersion = false;
 
 export async function callOnce(action, payload = {}) {
-  if (!SCRIPT_URL || SCRIPT_URL.startsWith('PASTE')) throw new ApiError('not_configured', 'SCRIPT_URL is not set');
+  if (!serverUrl || serverUrl.startsWith('PASTE')) throw new ApiError('not_configured', 'server address is not set');
   const timeout = action === 'newStory' ? API_TIMEOUT_STORY_MS : API_TIMEOUT_MS;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -97,7 +186,7 @@ export async function callOnce(action, payload = {}) {
     : action === 'clientError' ? { where: payload.where } : payload);
   let res;
   try {
-    res = await fetch(SCRIPT_URL, {
+    res = await fetch(serverUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, k: code, ...payload }),
