@@ -4,7 +4,7 @@
 const __util = (() => {
 // util.js — shared helpers for the Cloudflare server. Mirrors server/Util.gs.
 
-const SERVER_VERSION = '2.0.0';
+const SERVER_VERSION = '2.0.1';
 const TIME_ZONE = 'Asia/Jerusalem';
 
 /** The clock, replaceable in tests. */
@@ -879,7 +879,8 @@ async function actInit(env, child) {
     return sess;
   });
   let extra = null;
-  if (main && main.state.finished && main.state.result.passed && child.extraAllowed) {
+  // Another story is offered after today's story is done, whatever its result: reading more is the goal.
+  if (main && main.state.finished && child.extraAllowed) {
     extra = await updateSession(env.DB, loader(env, child, true), async (sess) => {
       if (sess) checkWindow(env, sess, child);
       return sess;
@@ -890,14 +891,16 @@ async function actInit(env, child) {
     today: todayStr(),
     child: publicSettings(child),
     session: publicSession(main, child),
-    extraSession: publicSession(extra, child)
+    extraSession: publicSession(extra, child),
+    // Tells the page that another story is open even when today's did not pass (the old server says nothing).
+    extraAfterAny: true
   };
 }
 
 async function requireExtraAllowed(env, child) {
   const main = await findSession(env.DB, child, todayStr(), false);
-  if (!child.extraAllowed || !main || !main.state.finished || !main.state.result.passed) {
-    fail('extra_not_allowed', 'Extra story is available after passing today\'s story');
+  if (!child.extraAllowed || !main || !main.state.finished) {
+    fail('extra_not_allowed', 'Extra story is available after today\'s story');
   }
 }
 
@@ -1035,7 +1038,7 @@ async function actFinish(env, child, req) {
   return updateSession(env.DB, loader(env, child, req.extra, true), async (sess) => {
     // Summing up twice (the first answer got lost, or two at once) gives the same result again.
     if (sess && sess.story && sess.state.finished) {
-      return { result: sess.state.result, extraAllowed: !sess.state.extra && sess.state.result.passed && child.extraAllowed, again: true };
+      return { result: sess.state.result, extraAllowed: child.extraAllowed, again: true };
     }
     loadActive(sess);
     const s = sess.state;
@@ -1054,7 +1057,7 @@ async function actFinish(env, child, req) {
       if (s.pages.some((p) => !p.answer) || s.finalAnswers.some((a) => !a)) fail('too_early', 'Not all questions were answered');
     }
     const r = closeStory(env, child, sess);
-    return { result: r, extraAllowed: !s.extra && r.passed && child.extraAllowed };
+    return { result: r, extraAllowed: child.extraAllowed };
   });
 }
 

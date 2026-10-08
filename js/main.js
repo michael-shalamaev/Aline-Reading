@@ -115,6 +115,7 @@ async function boot() {
     }
     const data = await call('init');
     state.child = data.child;
+    state.extraAfterAny = !!data.extraAfterAny;
     $('version').textContent = `v${VERSION} · שרת ${data.version}`;
     if (data.session && data.session.finished) {
       state.mainResult = data.session.result;
@@ -587,7 +588,7 @@ async function finish() {
       // An earlier try did finish (its answer was lost on the way): show what the server has.
       const data = await call('init').catch(() => null);
       const sess = data && (state.extra ? data.extraSession : data.session);
-      if (sess && sess.result) { state.session = sess; return summaryScreen(sess.result, !state.extra && sess.result.passed && state.child.extraAllowed); }
+      if (sess && sess.result) { state.session = sess; return summaryScreen(sess.result, state.child.extraAllowed && (state.extraAfterAny || (!state.extra && sess.result.passed))); }
     }
     // An answer that never reached the server: back to where the server is (it asks again).
     if (OUT_OF_STEP.has(e.code)) return resync(e, 'finish');
@@ -614,7 +615,8 @@ function summaryScreen(r, extraAllowed) {
     !extraDone && r.passed ? 'ההורה קיבל הודעה.' : ''
   ].filter(Boolean);
   $('summary-body').innerHTML = lines.map((l) => `<p>${esc(l)}</p>`).join('');
-  const canExtra = state.child.extraAllowed && state.mainResult && state.mainResult.passed;
+  // The new server offers another story after any result; the old one only after a pass.
+  const canExtra = state.child.extraAllowed && state.mainResult && (state.mainResult.passed || state.extraAfterAny);
   $('extra-btn').hidden = !(extraAllowed || canExtra);
   $('extra-btn').onclick = () => {
     state.extra = true;
