@@ -150,7 +150,7 @@ test('worker: next day starts a new story (Israel time)', async () => {
   assert.equal((await s.k({ action: 'init' })).data.session, null, 'after midnight in Israel');
 });
 
-test('worker: extra story only after passing, without questions, summed up with its last page', async () => {
+test('worker: extra story only after today\'s story, without questions, summed up with its last page', async () => {
   const s = loadWorker();
   assert.equal((await s.k({ action: 'newStory', topic: 'x', extra: true })).error.code, 'extra_not_allowed');
   const story = (await s.k({ action: 'newStory', topic: 'x' })).data.story;
@@ -169,6 +169,27 @@ test('worker: extra story only after passing, without questions, summed up with 
   await s.settle();
   assert.equal(s.mails.length, 2);
   assert.equal(s.rows('יומן').at(-1)[2], 'כן', 'marked as extra in the log');
+});
+
+test('worker: another story after a failed day too, again and again; the day\'s result stays', async () => {
+  const s = loadWorker();
+  const init0 = await s.k({ action: 'init' });
+  assert.equal(init0.data.extraAfterAny, true);
+  const story = (await s.k({ action: 'newStory', topic: 'cats' })).data.story;
+  const fin = await readAll(s, story, { skipPerPage: 30, answer: 0 });
+  assert.equal(fin.data.result.passed, false);
+  assert.equal(fin.data.extraAllowed, true, 'offered although the day did not pass');
+  for (const topic of ['more', 'and more']) {
+    const ex = await s.k({ action: 'newStory', topic, extra: true });
+    assert.equal(ex.ok, true, JSON.stringify(ex.error));
+    const exFin = await readAll(s, ex.data.story, { extra: true });
+    assert.equal(exFin.ok, true, JSON.stringify(exFin));
+    assert.equal(exFin.data.extraAllowed, true, 'one more after an extra story as well');
+  }
+  const init = await s.k({ action: 'init' });
+  assert.equal(init.data.session.result.passed, false, 'extra stories add, they do not replace the day\'s result');
+  await s.settle();
+  assert.deepEqual(s.rows('יומן').slice(1).map((r) => r[2]), ['לא', 'כן', 'כן']);
 });
 
 test('worker: busy model skipped; all busy → clear error, logged; topic refused → topic_blocked', async () => {

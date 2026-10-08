@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, toFirstPage } from './harness.mjs';
+import { startApp, toFirstPage, BACKEND } from './harness.mjs';
 import { tokenize } from '../../js/text.js';
 
 for (const lost of [false, true]) {
@@ -48,7 +48,36 @@ test(`extra story read badly on every page, each read twice${lost ? ', summing-u
     assert.equal(screen, 'summary', err);
     assert.match(await app.page.textContent('#summary-title'), /עוד סיפור/, 'the extra story\'s summary, not the main one');
     assert.equal((await app.mails()).length, 2, 'one mail per story, not two for the extra');
+    assert.equal(await app.page.isVisible('#extra-btn'), true, 'one more story after an extra one');
     assert.deepEqual(app.errors, []);
   } finally { await app.close(); }
 });
 }
+
+test('a day that did not pass: the new server offers another story, the old one does not', async () => {
+  const app = await startApp();
+  try {
+    await toFirstPage(app);
+    const k = app.code;
+    const st = (await app.session()).story;
+    for (const [i, pg] of st.pages.entries()) {
+      await app.call({ action: 'startPage', page: i, k });
+      await app.call({ action: 'submitPage', page: i, k, words: tokenize(pg.text).map(() => 'om'), insertions: 0, attemptId: 'x' + i });
+      await app.call({ action: 'answer', kind: 'page', page: i, choice: 0, k });
+    }
+    for (const f of [0, 1, 2]) await app.call({ action: 'answer', kind: 'final', index: f, choice: 0, k });
+    const fin = await app.call({ action: 'finish', k });
+    assert.equal(fin.data.result.passed, false);
+    await app.open();
+    await app.screen('summary');
+    assert.equal(await app.page.isVisible('#extra-btn'), BACKEND === 'worker');
+    if (BACKEND === 'worker') {
+      await app.page.click('#extra-btn');
+      await app.screen('topic');
+      await app.page.fill('#topic', 'cats');
+      await app.page.click('#make-story');
+      await app.screen('preview');
+    }
+    assert.deepEqual(app.errors, []);
+  } finally { await app.close(); }
+});
