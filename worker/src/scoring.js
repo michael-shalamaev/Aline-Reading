@@ -74,7 +74,7 @@ export function finalResult(child, sess) {
   const flags = [];
   if (fastPages.length) flags.push('קצב מהיר מדי בעמודים ' + fastPages.join(', '));
   if (s.expiredCount) flags.push('חלון הזמן פג ' + s.expiredCount + ' פעמים קודם');
-  if (sess.story.topicAdjusted) flags.push('הנושא שונה כי לא התאים לגיל');
+  if (sess.story.topicAdjusted) flags.push(topicChangedNote(s.topics[s.topics.length - 1], sess.story.topicUsed));
   return {
     passed: readingPassed && quizPassed, readingPassed, quizPassed,
     acc, words: t.n, errors: t.errors, om: t.om, sub: t.sub, mis: t.mis, hint: t.hint, ins: t.ins,
@@ -84,4 +84,9 @@ export function finalResult(child, sess) {
     wpm: Math.round((t.n - t.om) / Math.max(t.durSec / 60, 0.1)),
     quizCorrect: correct, quizTotal: answers.length, quizPct, flags
   };
+}
+
+/** What the parent reads when Gemini changed the topic: from what, to what. */
+export function topicChangedNote(chosen, used) {
+  return 'הנושא שונה' + (chosen ? ' מ"' + chosen + '"' : '') + (used ? ' ל"' + used + '"' : '') + ', כי לא התאים לסיפור ילדים';
 }

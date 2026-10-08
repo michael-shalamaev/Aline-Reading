@@ -93,6 +93,7 @@ function storyPrompt(child, topic, withQuestions) {
     'Topic chosen by the reader (it may be written in Hebrew): "' + String(topic).slice(0, 120) + '".',
     'If the topic does not fit a gentle children\'s story, or names real brands or famous people, ',
     'write about a close, friendly version of it and set topicAdjusted to true.',
+    'Otherwise set topicAdjusted to false: translating the topic, making it a character or adding details is not a change.',
     '',
     'The story should suit readers about ' + child.age + ' years old: interests, characters and humor for that age.',
     'English level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['בינוני']),

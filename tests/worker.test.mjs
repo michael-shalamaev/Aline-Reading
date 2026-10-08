@@ -10,6 +10,7 @@ import { tokenize as pageTokenize, normWord as pageNorm } from '../js/text.js';
 import { answerKey as pageKey } from '../js/answers.js';
 import * as util from '../worker/src/util.js';
 import worker from '../worker/src/index.js';
+import { storyPrompt } from '../worker/src/stories.js';
 
 const tokenize = pageTokenize;
 
@@ -192,10 +193,39 @@ test('worker: another story after a failed day too, again and again; the day\'s 
   assert.deepEqual(s.rows('יומן').slice(1).map((r) => r[2]), ['לא', 'כן', 'כן']);
 });
 
+test('worker: every story written reaches the sheet as readable text; a changed topic says from what to what', async () => {
+  const s = loadWorker({ adjust: true });
+  const st = await s.k({ action: 'newStory', topic: 'מכוניות מרוץ' });
+  assert.equal(st.ok, true, JSON.stringify(st.error));
+  await s.k({ action: 'newStory', topic: 'dragons' }); // written again: a row of its own
+  await s.settle();
+  const rows = s.rows('טקסט סיפורים');
+  assert.equal(rows[0][0], 'נוצר', 'the tab is made with its headers');
+  assert.equal(rows.length, 3);
+  const [, child, , extra, topic, used, changed, title, words, text, questions, id] = rows[1];
+  assert.equal(child, 'אלין');
+  assert.equal(extra, 'לא');
+  assert.equal(topic, 'מכוניות מרוץ');
+  assert.equal(used, 'dragon');
+  assert.equal(changed, 'כן');
+  assert.equal(title, 'Mia and the Tiny Dragon');
+  assert.ok(words > 100);
+  assert.match(text, /^עמוד 1\nMia found/);
+  assert.match(text, /\n\nעמוד 5\n/);
+  assert.match(questions, /עמוד 1: What did Mia find\?\n {3}1\. A cat\n {3}2\. A dragon ✓/);
+  assert.match(questions, /סיכום 3: /);
+  assert.equal(id, rows[2][11], 'same story, same id');
+  const fin = await readAll(s, (await s.k({ action: 'init' })).data.session.story);
+  assert.ok(fin.data.result.flags.includes('הנושא שונה מ"dragons" ל"dragon", כי לא התאים לסיפור ילדים'), fin.data.result.flags.join('|'));
+  const kid = { age: 10, level: 'בינוני', pages: 5, words: 450, lang: 'en-US' };
+  assert.match(storyPrompt(kid, 'תפוז', true), /translating the topic, making it a character or adding details is not a change/);
+});
+
 test('worker: busy model skipped; all busy → clear error, logged; topic refused → topic_blocked', async () => {
   let s = loadWorker({ busyModels: ['gemini-3.8-flash'] });
   assert.equal((await s.k({ action: 'newStory', topic: 'x' })).ok, true);
   assert.deepEqual(s.fetches.filter((f) => f.startsWith('model:')), ['model:gemini-3.8-flash', 'model:gemini-3.7-flash']);
+  await s.settle(); // its rows go to its own sheet before the next test server takes over the network
   s = loadWorker({ busyModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.8-flash-lite'] });
   assert.equal((await s.k({ action: 'newStory', topic: 'x' })).error.code, 'gemini_busy');
   await s.settle();

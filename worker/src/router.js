@@ -143,7 +143,8 @@ async function actNewStory(env, child, req) {
   if (before && before.state.startedAt) fail('locked', 'Reading already started');
   if (before && before.story && before.state.regenUsed >= child.regenPerDay) fail('no_regen_left', 'No more changes today');
 
-  const story = await generateStory(env, child, topic, !extra || child.extraQuestions);
+  const withQuestions = !extra || child.extraQuestions;
+  const story = await generateStory(env, child, topic, withQuestions);
 
   const load = () => findOrCreateSession(env.DB, child, todayStr(), extra, () => blankState(child, extra));
   return updateSession(env.DB, load, async (sess) => {
@@ -153,6 +154,10 @@ async function actNewStory(env, child, req) {
     sess.state.topics.push(topic);
     resetProgress(sess.state, story.pages.length);
     sess.dirty = true;
+    // A readable copy for the parent's sheet (tab "טקסט סיפורים").
+    sess.after.push(() => report(env, {
+      kind: 'story', childId: child.id, sessId: sess.state.id, date: sess.state.date, extra, topic, withQuestions, story
+    }));
     return publicSession(sess, child);
   });
 }
