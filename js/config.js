@@ -5,8 +5,8 @@ export const VERSION = '1.1.0';
 // The Google Apps Script web app address (ends with /exec). Filled in during setup.
 export const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxyzKHmLY0kweEtL40FlUtBQxuHbUz0KkN08DhkoM6_o35-WIkE-hhev2rcR9W1Cbmp/exec';
 
-// The new server (Cloudflare). Empty until it is set up.
-export const NEW_SERVER_URL = '';
+// The new server (Cloudflare).
+export const NEW_SERVER_URL = 'https://aline-reading.m-shalamaev.workers.dev';
 
 // Which server phones use unless told otherwise: 'old' (Apps Script) or 'new' (Cloudflare).
 // A single phone can switch with ?server=new or ?server=old in its link (it is remembered).

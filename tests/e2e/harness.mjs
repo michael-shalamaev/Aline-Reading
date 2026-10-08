@@ -82,7 +82,7 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
       let body = readFileSync(new URL(path, root), 'utf8');
       if (path === 'js/config.js') {
         body = body.replace(/SCRIPT_URL = '[^']*'/, "SCRIPT_URL = 'https://script.test/exec'")
-          .replace("NEW_SERVER_URL = ''", "NEW_SERVER_URL = 'https://new.test/exec'")
+          .replace(/NEW_SERVER_URL = '[^']*'/, "NEW_SERVER_URL = 'https://new.test/exec'")
           .replace(/API_TIMEOUT_MS = \d+/, 'API_TIMEOUT_MS = ' + timeoutMs);
       }
       if (path === 'js/api.js') body = body.replace('RETRY_DELAY_MS = 1500', 'RETRY_DELAY_MS = 100');
