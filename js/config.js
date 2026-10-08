@@ -10,7 +10,7 @@ export const NEW_SERVER_URL = 'https://aline-reading.m-shalamaev.workers.dev';
 
 // Which server phones use unless told otherwise: 'old' (Apps Script) or 'new' (Cloudflare).
 // A single phone can switch with ?server=new or ?server=old in its link (it is remembered).
-export const DEFAULT_SERVER = 'old';
+export const DEFAULT_SERVER = 'new';
 
 // Microsoft Speech SDK for browsers.
 export const SPEECH_SDK_URLS = [
