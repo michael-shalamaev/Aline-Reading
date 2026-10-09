@@ -93,7 +93,10 @@ function finalResult(child, sess) {
   var flags = [];
   if (fastPages.length) flags.push('קצב מהיר מדי בעמודים ' + fastPages.join(', '));
   if (s.expiredCount) flags.push('חלון הזמן פג ' + s.expiredCount + ' פעמים קודם');
-  if (story.topicAdjusted) flags.push('הנושא שונה כי לא התאים לגיל');
+  if (story.topicAdjusted) {
+    var chosen = s.topics[s.topics.length - 1];
+    flags.push('הנושא שונה' + (chosen ? ' מ"' + chosen + '"' : '') + (story.topicUsed ? ' ל"' + story.topicUsed + '"' : '') + ', כי לא התאים לסיפור ילדים');
+  }
 
   return {
     passed: readingPassed && quizPassed,

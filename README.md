@@ -48,6 +48,8 @@ with a 10-minute token that the script issues.
 | `Scoring.gs` | Counting, pass rules, best attempt |
 | `Logging.gs` | Log, pages, hard words, errors tabs |
 | `Mailer.gs` | Summary e-mail |
+| `Bridge.gs` | For the new server: settings, rows and mails, behind a secret |
+| `StoryTexts.gs` | Readable copy of each story the new server writes (tab "טקסט סיפורים") |
 | `Setup.gs` | `setup`, `addChild`, `selfTest`, `testStory` |
 | `Util.gs` | Helpers, tokenizer, version |
 

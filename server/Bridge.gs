@@ -62,6 +62,9 @@ function bridgeItem(it) {
     case 'practice':
       withLock(function () { logPracticeResults(child, it.results || [], Utilities.formatDate(new Date(it.at || Date.now()), tz(), 'yyyy-MM-dd')); });
       return;
+    case 'story':
+      logStoryText(it); // StoryTexts.gs
+      return;
     case 'error':
       sheet(SHEETS.errors).appendRow([
         new Date(it.at || Date.now()), it.childId || '', String(it.action || '').slice(0, 90),

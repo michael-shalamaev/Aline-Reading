@@ -4,7 +4,7 @@
 const __util = (() => {
 // util.js — shared helpers for the Cloudflare server. Mirrors server/Util.gs.
 
-const SERVER_VERSION = '2.0.1';
+const SERVER_VERSION = '2.0.2';
 const TIME_ZONE = 'Asia/Jerusalem';
 
 /** The clock, replaceable in tests. */
@@ -446,6 +446,7 @@ function storyPrompt(child, topic, withQuestions) {
     'Topic chosen by the reader (it may be written in Hebrew): "' + String(topic).slice(0, 120) + '".',
     'If the topic does not fit a gentle children\'s story, or names real brands or famous people, ',
     'write about a close, friendly version of it and set topicAdjusted to true.',
+    'Otherwise set topicAdjusted to false: translating the topic, making it a character or adding details is not a change.',
     '',
     'The story should suit readers about ' + child.age + ' years old: interests, characters and humor for that age.',
     'English level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['בינוני']),
@@ -687,7 +688,7 @@ function finalResult(child, sess) {
   const flags = [];
   if (fastPages.length) flags.push('קצב מהיר מדי בעמודים ' + fastPages.join(', '));
   if (s.expiredCount) flags.push('חלון הזמן פג ' + s.expiredCount + ' פעמים קודם');
-  if (sess.story.topicAdjusted) flags.push('הנושא שונה כי לא התאים לגיל');
+  if (sess.story.topicAdjusted) flags.push(topicChangedNote(s.topics[s.topics.length - 1], sess.story.topicUsed));
   return {
     passed: readingPassed && quizPassed, readingPassed, quizPassed,
     acc, words: t.n, errors: t.errors, om: t.om, sub: t.sub, mis: t.mis, hint: t.hint, ins: t.ins,
@@ -699,7 +700,12 @@ function finalResult(child, sess) {
   };
 }
 
-return { MAX_ATTEMPTS, scoreAttempt, pageBelowBar, bestIndex, summaryOfAttempt, finalResult };
+/** What the parent reads when Gemini changed the topic: from what, to what. */
+function topicChangedNote(chosen, used) {
+  return 'הנושא שונה' + (chosen ? ' מ"' + chosen + '"' : '') + (used ? ' ל"' + used + '"' : '') + ', כי לא התאים לסיפור ילדים';
+}
+
+return { MAX_ATTEMPTS, scoreAttempt, pageBelowBar, bestIndex, summaryOfAttempt, finalResult, topicChangedNote };
 })();
 
 // ---- sessions.js ----
@@ -914,7 +920,8 @@ async function actNewStory(env, child, req) {
   if (before && before.state.startedAt) fail('locked', 'Reading already started');
   if (before && before.story && before.state.regenUsed >= child.regenPerDay) fail('no_regen_left', 'No more changes today');
 
-  const story = await generateStory(env, child, topic, !extra || child.extraQuestions);
+  const withQuestions = !extra || child.extraQuestions;
+  const story = await generateStory(env, child, topic, withQuestions);
 
   const load = () => findOrCreateSession(env.DB, child, todayStr(), extra, () => blankState(child, extra));
   return updateSession(env.DB, load, async (sess) => {
@@ -924,6 +931,10 @@ async function actNewStory(env, child, req) {
     sess.state.topics.push(topic);
     resetProgress(sess.state, story.pages.length);
     sess.dirty = true;
+    // A readable copy for the parent's sheet (tab "טקסט סיפורים").
+    sess.after.push(() => report(env, {
+      kind: 'story', childId: child.id, sessId: sess.state.id, date: sess.state.date, extra, topic, withQuestions, story
+    }));
     return publicSession(sess, child);
   });
 }
