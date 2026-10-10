@@ -15,9 +15,13 @@ const LEVEL_GUIDE = {
 
 const versionOf = (name) => { const m = name.match(/gemini-([\d.]+)-/); return m ? parseFloat(m[1]) : 0; };
 
-/** Newest two Flash models, then one Flash-Lite; GEMINI_MODEL first if set. Cached 6 hours. */
+// Flash-Lite first: in use it wrote a story in 4-6 seconds, close to the length asked; Flash took
+// 11 seconds (once a minute and more) and wrote 50-70% of the length. The Flash models stay as fallback.
+const MODELS_KEY = 'gemini_models_v2'; // v2: the order changed, so a list kept from before is not used
+
+/** Newest Flash-Lite, then the newest two Flash models; GEMINI_MODEL first if set. Cached 6 hours. */
 export async function geminiModels(env) {
-  let list = await kvGet(env.DB, 'gemini_models');
+  let list = await kvGet(env.DB, MODELS_KEY);
   if (!list) {
     const res = await fetch(GEMINI_BASE + '/models?pageSize=200', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
     if (res.status !== 200) fail('gemini_error', 'List models failed: ' + (await res.text()).slice(0, 300));
@@ -27,9 +31,9 @@ export async function geminiModels(env) {
     const byVersion = (a, b) => versionOf(b) - versionOf(a);
     const flash = names.filter((n) => /^gemini-[\d.]+-flash$/.test(n)).sort(byVersion);
     const lite = names.filter((n) => /^gemini-[\d.]+-flash-lite$/.test(n)).sort(byVersion);
-    list = flash.slice(0, 2).concat(lite.slice(0, 1));
+    list = lite.slice(0, 1).concat(flash.slice(0, 2));
     if (!list.length) fail('gemini_error', 'No Flash model available. Set GEMINI_MODEL.');
-    await kvPut(env.DB, 'gemini_models', list, 21600);
+    await kvPut(env.DB, MODELS_KEY, list, 21600);
   }
   const fixed = env.GEMINI_MODEL;
   if (fixed) list = [fixed].concat(list.filter((n) => n !== fixed));
@@ -108,9 +112,11 @@ export async function generateStory(env, child, topic, withQuestions) {
   const deadline = Date.now() + (Number(env.STORY_BUDGET_MS) || STORY_BUDGET_MS);
   let lastErr = null;
   let shortStory = null; // usable, but shorter than asked: kept in case there is no time to write it again
+  let answered = null;   // the model that answered: a second try starts there, not at a slow one
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const raw = await callGemini(env, storyPrompt(child, topic, withQuestions), deadline);
+      const raw = await callGemini(env, storyPrompt(child, topic, withQuestions), deadline, answered);
+      answered = raw._model;
       const story = validateStory(raw, child, MIN_LENGTH_LAST);
       if (story.wordCount >= child.words * MIN_LENGTH) return story;
       shortStory = story;
@@ -141,9 +147,10 @@ async function geminiRequest(env, model, prompt, lowThinking, timeoutMs) {
 
 const isTimeout = (e) => e && (e.name === 'TimeoutError' || e.name === 'AbortError');
 
-async function callGemini(env, prompt, deadline) {
+async function callGemini(env, prompt, deadline, startWith = null) {
   if (!env.GEMINI_API_KEY) fail('config_missing', 'GEMINI_API_KEY not set');
-  const models = await geminiModels(env);
+  let models = await geminiModels(env);
+  if (startWith && models.includes(startWith)) models = [startWith].concat(models.filter((m) => m !== startWith));
   const notes = [];
   for (const model of models) {
     const left = deadline - Date.now();
@@ -178,7 +185,7 @@ async function callGemini(env, prompt, deadline) {
       return story;
     }
     notes.push(model + ' ' + res.status);
-    if (res.status === 404) await kvDelete(env.DB, 'gemini_models');
+    if (res.status === 404) await kvDelete(env.DB, MODELS_KEY);
     if (!GEMINI_TRY_NEXT.has(res.status)) fail('gemini_error', 'Gemini ' + res.status + ': ' + body.slice(0, 300));
   }
   if (notes.length && notes.every((n) => n.includes('no answer'))) fail('gemini_timeout', 'No model answered in time: ' + notes.join(', '));
