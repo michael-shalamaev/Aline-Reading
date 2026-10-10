@@ -97,7 +97,8 @@ function storyPrompt(child, topic, withQuestions) {
     '',
     'The story should suit readers about ' + child.age + ' years old: interests, characters and humor for that age.',
     'English level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['בינוני']),
-    'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each (total about ' + child.words + ' words).',
+    'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each, and never fewer than ' + perPage +
+      ' words on any page (total at least ' + child.words + ' words). Count the words; a longer page is fine, a shorter one is not.',
     'Split pages at natural points. Each page is one to three paragraphs separated by a blank line.',
     '',
     'Reading-aloud rules, very important:',

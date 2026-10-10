@@ -88,7 +88,7 @@ function fmtDate(d, tz, fmt) {
 function fakeStory(prompt, opts) {
   if (!/exactly (\d+) pages/.test(prompt)) return 'OK';
   const pages = Number(prompt.match(/exactly (\d+) pages/)[1]);
-  const per = Number(prompt.match(/about (\d+) words each/)[1]);
+  const per = Math.round(Number(prompt.match(/about (\d+) words each/)[1]) * (opts.short ? 0.7 : 1));
   const base = 'Mia found a tiny dragon in the garden and it wanted to eat warm pizza with her friends';
   const words = base.split(' ');
   const mk = (k) => Array.from({ length: per }, (_, i) => words[(i + k) % words.length]).join(' ') + '.';
@@ -105,6 +105,7 @@ function fakeStory(prompt, opts) {
 }
 
 export function loadServer(options = {}) {
+  let shortLeft = options.shortStories || 0; // this many stories come back too short (70% of the length)
   const props = new Map();
   const cache = new Map();
   const books = new Map();
@@ -172,7 +173,9 @@ export function loadServer(options = {}) {
           if (options.blockTopic && prompt.includes(options.blockTopic)) {
             return reply(200, { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } });
           }
-          const story = fakeStory(prompt, options);
+          const short = shortLeft > 0;
+          if (short) shortLeft--;
+          const story = fakeStory(prompt, { ...options, short });
           return reply(200, { candidates: [{ content: { parts: [{ text: JSON.stringify(story) }] } }] });
         }
         if (url.includes('issueToken')) return reply(200, 'TOKEN-' + clock.now);
