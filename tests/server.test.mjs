@@ -57,7 +57,7 @@ test('full day: story, pages, questions, pass, mail, log', () => {
   assert.equal(story.pages.length, 5);
   assert.equal(story.pages[0].question.answer, undefined, 'answers never reach the phone');
   assert.deepEqual(story.pages[0].hardWords, ['dragon', 'garden'], 'hard words not in text are dropped');
-  assert.ok(s.fetches.some((u) => u.includes('gemini-3.8-flash:generateContent')), 'newest Flash model chosen');
+  assert.ok(s.fetches.some((u) => u.includes('gemini-3.8-flash-lite:generateContent')), 'newest Flash-Lite model chosen first');
 
   const fin = readAll(s, story, { skipPerPage: 2 });
   assert.equal(fin.ok, true, JSON.stringify(fin));
@@ -187,11 +187,11 @@ test('extra story only after passing, without questions by default', () => {
 });
 
 test('a busy model is skipped: the next model writes the story', () => {
-  const s = ready({ busyModels: ['gemini-3.8-flash'] });
+  const s = ready({ busyModels: ['gemini-3.8-flash-lite'] });
   const r = s.k({ action: 'newStory', topic: 'x' });
   assert.equal(r.ok, true, JSON.stringify(r));
   const tried = s.fetches.filter((f) => f.startsWith('model:'));
-  assert.deepEqual(tried, ['model:gemini-3.8-flash', 'model:gemini-3.7-flash']);
+  assert.deepEqual(tried, ['model:gemini-3.8-flash-lite', 'model:gemini-3.8-flash']);
 });
 
 test('all models busy: a clear error, one round only, logged', () => {

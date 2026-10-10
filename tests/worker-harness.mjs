@@ -24,7 +24,9 @@ export function loadWorker(options = {}) {
     AZURE_SPEECH_REGION: 'westeurope',
     BRIDGE_URL,
     BRIDGE_SECRET: options.wrongSecret ? 'wrong' : SECRET,
-    RATE_LIMIT_PER_MINUTE: options.rateLimit ? String(options.rateLimit) : undefined
+    RATE_LIMIT_PER_MINUTE: options.rateLimit ? String(options.rateLimit) : undefined,
+    GEMINI_TIMEOUT_MS: options.geminiTimeoutMs ? String(options.geminiTimeoutMs) : undefined,
+    STORY_BUDGET_MS: options.storyBudgetMs ? String(options.storyBudgetMs) : undefined
   };
   resetSchemaFlag();
   clock.now = () => gas.clock.now;
@@ -40,6 +42,14 @@ export function loadWorker(options = {}) {
       bridge.calls.push(body.action);
       if (bridge.down) return new Response('<!DOCTYPE html><title>Error</title>', { status: 200, headers: { 'content-type': 'text/html' } });
       return new Response(JSON.stringify(gas.api(body)), { headers: { 'content-type': 'application/json' } });
+    }
+    // A model that never answers: only the request's time limit ends it.
+    const slow = url.includes(':generateContent') && (options.slowModels || []).find((m) => url.includes('/models/' + m + ':'));
+    if (slow) {
+      gas.fetches.push('model:' + slow);
+      // (Node's own timer behind AbortSignal.timeout does not keep a test alive; this one does, until the abort.)
+      const alive = setTimeout(() => {}, 60000);
+      return new Promise((resolve, reject) => init.signal.addEventListener('abort', () => { clearTimeout(alive); reject(init.signal.reason); }));
     }
     // Gemini and Microsoft: the Apps Script mock's fakes, reused.
     const r = gas.ctx.UrlFetchApp.fetch(url, { payload: init.body });

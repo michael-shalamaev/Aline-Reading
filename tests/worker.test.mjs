@@ -58,7 +58,7 @@ test('worker: full day — story, pages, questions, pass; log, pages, hard words
   assert.equal(story.pages.length, 5);
   assert.equal(story.pages[0].question.answer, undefined, 'answers never reach the phone');
   assert.deepEqual(story.pages[0].hardWords, ['dragon', 'garden']);
-  assert.ok(s.fetches.some((u) => u.includes('gemini-3.8-flash:generateContent')));
+  assert.ok(s.fetches.some((u) => u.includes('gemini-3.8-flash-lite:generateContent')));
   const fin = await readAll(s, story, { skipPerPage: 2 });
   assert.equal(fin.ok, true, JSON.stringify(fin));
   assert.equal(fin.data.result.passed, true);
@@ -221,10 +221,45 @@ test('worker: every story written reaches the sheet as readable text; a changed 
   assert.match(storyPrompt(kid, 'תפוז', true), /translating the topic, making it a character or adding details is not a change/);
 });
 
+test('worker: a model that does not answer in time is left for the next one; the slow one is noted', async () => {
+  const s = loadWorker({ slowModels: ['gemini-3.8-flash-lite'], geminiTimeoutMs: 200 });
+  const t0 = Date.now();
+  const st = await s.k({ action: 'newStory', topic: 'x' });
+  assert.equal(st.ok, true, JSON.stringify(st.error));
+  assert.ok(Date.now() - t0 < 3000, 'did not wait for the stuck model');
+  assert.deepEqual(s.fetches.filter((f) => f.startsWith('model:')), ['model:gemini-3.8-flash-lite', 'model:gemini-3.8-flash']);
+  await s.settle();
+  assert.ok(s.rows('שגיאות').some((r) => r[2] === 'gemini gemini-3.8-flash-lite' && /gemini_slow: no answer/.test(r[3])));
+  // A second try (the first story was short) starts at the model that answered, not at the stuck one.
+  const again = loadWorker({ slowModels: ['gemini-3.8-flash-lite'], geminiTimeoutMs: 200, shortStories: 1 });
+  assert.equal((await again.k({ action: 'newStory', topic: 'x' })).ok, true);
+  assert.deepEqual(again.fetches.filter((f) => f.startsWith('model:')), ['model:gemini-3.8-flash-lite', 'model:gemini-3.8-flash', 'model:gemini-3.8-flash']);
+  await again.settle();
+  const all = loadWorker({ slowModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.8-flash-lite'], geminiTimeoutMs: 100 });
+  assert.equal((await all.k({ action: 'newStory', topic: 'x' })).error.code, 'gemini_timeout');
+  await all.settle();
+});
+
+test('worker: a story shorter than asked is written again once; with no time left the short one is taken', async () => {
+  let s = loadWorker({ shortStories: 1 });
+  let st = await s.k({ action: 'newStory', topic: 'x' });
+  assert.equal(st.ok, true, JSON.stringify(st.error));
+  assert.equal(s.fetches.filter((f) => f.startsWith('model:')).length, 2, 'written again');
+  const target = (await s.k({ action: 'init' })).data.child.words;
+  assert.ok(st.data.story.wordCount >= target * 0.85, st.data.story.wordCount + ' of ' + target);
+  await s.settle();
+  assert.ok(s.rows('שגיאות').some((r) => /generateStory#1/.test(r[2]) && new RegExp('below ' + Math.round(target * 0.85)).test(r[3])));
+  s = loadWorker({ shortStories: 1, storyBudgetMs: 10000 }); // time for one try, not for a second
+  st = await s.k({ action: 'newStory', topic: 'x' });
+  assert.equal(st.ok, true, 'no time for another: the short story is still a story ' + JSON.stringify(st.error));
+  assert.equal(s.fetches.filter((f) => f.startsWith('model:')).length, 1);
+  assert.ok(st.data.story.wordCount < target * 0.85);
+});
+
 test('worker: busy model skipped; all busy → clear error, logged; topic refused → topic_blocked', async () => {
-  let s = loadWorker({ busyModels: ['gemini-3.8-flash'] });
+  let s = loadWorker({ busyModels: ['gemini-3.8-flash-lite'] });
   assert.equal((await s.k({ action: 'newStory', topic: 'x' })).ok, true);
-  assert.deepEqual(s.fetches.filter((f) => f.startsWith('model:')), ['model:gemini-3.8-flash', 'model:gemini-3.7-flash']);
+  assert.deepEqual(s.fetches.filter((f) => f.startsWith('model:')), ['model:gemini-3.8-flash-lite', 'model:gemini-3.8-flash']);
   await s.settle(); // its rows go to its own sheet before the next test server takes over the network
   s = loadWorker({ busyModels: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.8-flash-lite'] });
   assert.equal((await s.k({ action: 'newStory', topic: 'x' })).error.code, 'gemini_busy');

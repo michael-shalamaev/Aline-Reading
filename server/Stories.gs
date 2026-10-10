@@ -17,7 +17,7 @@ var LEVEL_GUIDE = {
  * (Google answers 503/429), the next one is tried.
  */
 function geminiModels() {
-  var cached = CacheService.getScriptCache().get('gemini_models');
+  var cached = CacheService.getScriptCache().get('gemini_models_v2');
   var list = cached ? JSON.parse(cached) : null;
   if (!list) {
     var res = UrlFetchApp.fetch(GEMINI_BASE + '/models?pageSize=200', {
@@ -31,9 +31,9 @@ function geminiModels() {
     var byVersion = function (a, b) { return versionOf(b) - versionOf(a); };
     var flash = names.filter(function (n) { return /^gemini-[\d.]+-flash$/.test(n); }).sort(byVersion);
     var lite = names.filter(function (n) { return /^gemini-[\d.]+-flash-lite$/.test(n); }).sort(byVersion);
-    list = flash.slice(0, 2).concat(lite.slice(0, 1));
+    list = lite.slice(0, 1).concat(flash.slice(0, 2)); // Flash-Lite first: faster, and closer to the length asked
     if (!list.length) fail('gemini_error', 'No Flash model available. Set GEMINI_MODEL.');
-    CacheService.getScriptCache().put('gemini_models', JSON.stringify(list), 21600);
+    CacheService.getScriptCache().put('gemini_models_v2', JSON.stringify(list), 21600);
   }
   var fixed = prop('GEMINI_MODEL');
   if (fixed) list = [fixed].concat(list.filter(function (n) { return n !== fixed; }));
@@ -97,7 +97,8 @@ function storyPrompt(child, topic, withQuestions) {
     '',
     'The story should suit readers about ' + child.age + ' years old: interests, characters and humor for that age.',
     'English level: ' + (LEVEL_GUIDE[child.level] || LEVEL_GUIDE['בינוני']),
-    'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each (total about ' + child.words + ' words).',
+    'Length: exactly ' + child.pages + ' pages, about ' + perPage + ' words each, and never fewer than ' + perPage +
+      ' words on any page (total at least ' + child.words + ' words). Count the words; a longer page is fine, a shorter one is not.',
     'Split pages at natural points. Each page is one to three paragraphs separated by a blank line.',
     '',
     'Reading-aloud rules, very important:',
@@ -179,7 +180,7 @@ function callGemini(prompt) {
       return story;
     }
     notes.push(models[i] + ' ' + code);
-    if (code === 404) CacheService.getScriptCache().remove('gemini_models');
+    if (code === 404) CacheService.getScriptCache().remove('gemini_models_v2');
     if (!GEMINI_TRY_NEXT[code]) fail('gemini_error', 'Gemini ' + code + ': ' + body.slice(0, 300));
   }
   fail('gemini_busy', 'All models busy: ' + notes.join(', '));
