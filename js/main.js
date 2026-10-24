@@ -280,6 +280,7 @@ async function readingScreen(i, t0, started) {
   updateHints();
   $('mic-state').textContent = 'רגע… מכינים את המיקרופון';
   $('mic-state').className = 'mic';
+  $('done-reading').textContent = 'סיימתי';
   $('done-reading').disabled = true;
   $('page-text').classList.add('waiting');
   $('ready-banner').hidden = true;
@@ -303,6 +304,7 @@ async function readingScreen(i, t0, started) {
 
   let session = null;
   let listenedAt = 0;
+  let interrupted = false; // Microsoft stopped listening: nothing of this reading counts
   // The server refused or could not start the page: stop listening and deal with it.
   let aborted = false;
   const abort = async (e, r) => {
@@ -331,10 +333,20 @@ async function readingScreen(i, t0, started) {
         }
       },
       onProblem: (details) => {
-        // Microsoft stopped listening in the middle (connection, token): say so, do not let her read into nothing.
+        // Microsoft stopped listening in the middle (connection, quota): this reading is not
+        // counted and not sent. She reads the page again, without losing her second try.
         reportError('reading: speech stopped', new Error(String(details)), 'reading');
-        $('mic-state').textContent = 'הבדיקה נקטעה. לוחצים "סיימתי" וקוראים שוב';
+        if (finished) return;
+        finished = true;
+        interrupted = true;
+        clearTimeout(safety);
+        clearTimeout(autoStop);
+        if (session) session.stop();
+        $('mic-state').textContent = 'ההקשבה נקטעה, והקריאה הזו לא נספרת. לוחצים "לקרוא שוב"';
         $('mic-state').className = 'mic';
+        $('done-reading').textContent = 'לקרוא שוב';
+        $('done-reading').disabled = false;
+        $('done-reading').onclick = () => beginPage(i);
       }
     });
   } catch (e) {
@@ -343,7 +355,7 @@ async function readingScreen(i, t0, started) {
     finished = true;
     return showError(e, () => beginPage(i), 'reading: microphone');
   }
-  if (aborted) { session.stop(); return; }
+  if (aborted || interrupted) { session.stop(); return; }
   listenedAt = performance.now();
   log('speech', `listening ${Math.round(listenedAt - t0)}ms after "start reading" was pressed`);
   // Only now is anything heard: tell the child clearly that she can start.

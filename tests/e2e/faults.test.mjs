@@ -178,7 +178,7 @@ test('the server cannot start the page while she already reads: listening stops,
   } finally { await app.close(); }
 });
 
-test('Microsoft drops the connection mid-page: the child is told, and it is reported', async () => {
+test('Microsoft drops the connection mid-page, twice: not counted, reported; she reads the page again and it counts once', async () => {
   const app = await startApp();
   try {
     await toFirstPage(app);
@@ -186,8 +186,24 @@ test('Microsoft drops the connection mid-page: the child is told, and it is repo
     await app.page.click('#go-read');
     await app.page.waitForFunction(() => /נקטעה/.test(document.querySelector('#mic-state').textContent));
     await app.shot('f3-speech-dropped');
+    assert.equal(await app.page.textContent('#done-reading'), 'לקרוא שוב');
+    // Dropped again on the second go.
+    await app.page.click('#done-reading');
+    await app.page.waitForFunction(() => /נקטעה/.test(document.querySelector('#mic-state').textContent) &&
+      document.querySelector('#done-reading').textContent === 'לקרוא שוב');
+    // Third go works.
+    await app.page.evaluate(() => { window.__fakeReading = { skip: [], mis: [] }; });
+    await app.page.click('#done-reading');
+    await app.screen('reading');
+    await app.page.waitForFunction(() => document.querySelector('#done-reading').textContent === 'סיימתי' && !document.querySelector('#done-reading').disabled);
+    await app.page.waitForTimeout(1200);
+    await app.page.click('#done-reading');
+    await app.screen('result');
+    await app.page.waitForTimeout(600);
+    assert.equal(app.calls.filter((c) => c.action === 'submitPage').length, 1, 'the dropped readings were never sent');
+    assert.equal(await attemptsOf(app, 0), 1);
     await new Promise((r) => setTimeout(r, 400));
-    assert.ok((await phoneRows(app)).some((r) => r[2] === 'טלפון: reading: speech stopped'));
+    assert.equal((await phoneRows(app)).filter((r) => r[2] === 'טלפון: reading: speech stopped').length, 2);
   } finally { await app.close(); }
 });
 
