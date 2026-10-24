@@ -187,3 +187,25 @@ test('words that are not in the text nearby are extra words, and are listed', ()
   assert.equal(r.insertions, 2);
   assert.deepEqual(r.extraWords, ['pizza', 'robot']);
 });
+
+test('going back further than a few words to read again is not an error: any word of the page', () => {
+  const ref = tokenize('Ben and his dog followed the little creature through the shady woods. They walked past big bushes and tall trees until the sun went down behind the hill.');
+  const r = alignPage(ref, heard('ben and his dog followed the little creature through the shady woods they walked past big bushes and tall trees until ben and his dog followed the sun went down behind the hill'));
+  assert.equal(r.insertions, 0);
+  assert.equal(summarize(r.statuses, r.insertions).errors, 0);
+});
+
+test('sounding a long word out: the pieces are not errors, the word said in the end counts', () => {
+  const ref = tokenize('The elephant drank water.');
+  const r = alignPage(ref, heard('the elle if ant elephant drank water'));
+  assert.equal(r.insertions, 0);
+  assert.deepEqual(r.statuses, ['ok', 'ok', 'ok', 'ok']);
+  // Pieces of a word, but the word itself never said: the pieces stand in for it ("another word").
+  const r2 = alignPage(ref, heard('the elle if ant drank water'));
+  assert.notEqual(r2.statuses[1], 'ok');
+  // Not pieces: a different first letter, or far longer than the word, are still extra words.
+  const r3 = alignPage(ref, heard('the pizza elephant drank water'));
+  assert.equal(r3.insertions, 1);
+  const r4 = alignPage(tokenize('The tiger ran home.'), heard('the tall tower terrible tiger ran home'));
+  assert.ok(r4.insertions >= 1, 'too many letters for pieces of "tiger"');
+});
