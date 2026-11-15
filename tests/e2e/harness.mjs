@@ -30,7 +30,7 @@ export const GOOGLE_ERROR_PAGE = '<!DOCTYPE html><html><head><title>Error</title
  * realClockSkewMs: the server's clock follows real time, this far ahead of the phone's.
  * 'after' means the server did the work and saved, but the phone does not get the answer.
  */
-export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpts = {}, timePerCallMs = 40000, realClockSkewMs = null } = {}) {
+export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpts = {}, timePerCallMs = 40000, realClockSkewMs = null, silenceMs = 60000 } = {}) {
   let server, w = null;
   if (BACKEND === 'worker') {
     w = loadWorker({ ...serverOpts, rateLimit: 100000 });
@@ -83,7 +83,8 @@ export async function startApp({ fault = () => null, timeoutMs = 4000, serverOpt
       if (path === 'js/config.js') {
         body = body.replace(/SCRIPT_URL = '[^']*'/, "SCRIPT_URL = 'https://script.test/exec'")
           .replace(/NEW_SERVER_URL = '[^']*'/, "NEW_SERVER_URL = 'https://new.test/exec'")
-          .replace(/API_TIMEOUT_MS = \d+/, 'API_TIMEOUT_MS = ' + timeoutMs);
+          .replace(/API_TIMEOUT_MS = \d+/, 'API_TIMEOUT_MS = ' + timeoutMs)
+          .replace(/SILENCE_PAUSE_MS = \d+/, 'SILENCE_PAUSE_MS = ' + silenceMs);
       }
       if (path === 'js/api.js') body = body.replace('RETRY_DELAY_MS = 1500', 'RETRY_DELAY_MS = 100');
       return route.fulfill({ contentType: TYPES[path.split('.').pop()] || 'text/plain', body });

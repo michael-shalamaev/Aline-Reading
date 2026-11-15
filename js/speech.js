@@ -100,44 +100,68 @@ function wordsOf(SDK, result) {
 
 /**
  * Starts reading a page. onProgress(heardWordsSoFar) fires on every partial result,
- * for the live highlight. Returns {stop()} which resolves to all heard words.
+ * for the live highlight. onSilence() fires when nothing was said for silenceMs: the
+ * caller may then pause() — Microsoft bills by the time it listens — and resume() later,
+ * on a fresh connection; what was heard before is kept. stop() resolves to all heard words.
  */
-export async function startReading({ referenceText, lang, onProgress, onProblem }) {
+export async function startReading({ referenceText, lang, onProgress, onProblem, onSilence, silenceMs = 0 }) {
   const SDK = await loadSdk();
-  const t = await getToken();
-  const audio = SDK.AudioConfig.fromDefaultMicrophoneInput();
-  const rec = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), audio);
-  paConfig(SDK, referenceText).applyTo(rec);
-
   const finals = [];
   let interim = [];
+  let rec = null;        // the open connection, null while paused
+  let lastSpeech = Date.now();
+  let silenceTold = false;
   const report = () => onProgress?.([...finals.map((f) => f.word), ...interim]);
 
-  rec.recognizing = (_, e) => {
-    interim = tokenize(e.result.text);
-    report();
-  };
-  rec.recognized = (_, e) => {
-    if (e.result.reason === SDK.ResultReason.RecognizedSpeech) {
-      const words = wordsOf(SDK, e.result);
-      finals.push(...words);
-      log('speech', 'segment', words.map((w) => `${w.word}:${Math.round(w.acc)}`).join(' '));
-    }
-    interim = [];
-    report();
-  };
-  rec.canceled = (_, e) => {
-    log('speech', 'canceled', { reason: e.reason, code: e.errorCode, details: e.errorDetails });
-    if (e.reason === SDK.CancellationReason.Error) onProblem?.(e.errorDetails || 'speech_error');
-  };
-  rec.sessionStarted = () => log('speech', 'session started');
-  rec.sessionStopped = () => log('speech', 'session stopped');
+  async function open() {
+    const t = await getToken();
+    const r = new SDK.SpeechRecognizer(makeConfig(SDK, t, lang), SDK.AudioConfig.fromDefaultMicrophoneInput());
+    paConfig(SDK, referenceText).applyTo(r);
+    // Any speech heard, right or wrong (sounding a word out, trying again), counts as talking.
+    r.recognizing = (_, e) => {
+      lastSpeech = Date.now();
+      interim = tokenize(e.result.text);
+      report();
+    };
+    r.recognized = (_, e) => {
+      if (e.result.reason === SDK.ResultReason.RecognizedSpeech) {
+        lastSpeech = Date.now();
+        const words = wordsOf(SDK, e.result);
+        finals.push(...words);
+        log('speech', 'segment', words.map((w) => `${w.word}:${Math.round(w.acc)}`).join(' '));
+      }
+      interim = [];
+      report();
+    };
+    r.canceled = (_, e) => {
+      log('speech', 'canceled', { reason: e.reason, code: e.errorCode, details: e.errorDetails });
+      if (r === rec && e.reason === SDK.CancellationReason.Error) onProblem?.(e.errorDetails || 'speech_error');
+    };
+    r.sessionStarted = () => log('speech', 'session started');
+    r.sessionStopped = () => log('speech', 'session stopped');
+    rec = r;
+    await new Promise((resolve, reject) => r.startContinuousRecognitionAsync(resolve, (err) => {
+      rec = null;
+      reject(new Error(String(err)));
+    }));
+    lastSpeech = Date.now();
+    silenceTold = false;
+  }
+
+  function close() {
+    const r = rec;
+    if (!r) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => { if (rec === r) rec = null; try { r.close(); } catch { /* closed */ } interim = []; resolve(); };
+      r.stopContinuousRecognitionAsync(done, (err) => { log('speech', 'stop error', String(err)); done(); });
+    });
+  }
 
   // Keep the token fresh for long pages.
   const refresher = setInterval(async () => {
     try {
       const fresh = await getToken();
-      if (rec.authorizationToken !== fresh.token) {
+      if (rec && rec.authorizationToken !== fresh.token) {
         rec.authorizationToken = fresh.token;
         log('speech', 'token refreshed');
       }
@@ -145,21 +169,30 @@ export async function startReading({ referenceText, lang, onProgress, onProblem 
       log('speech', 'token refresh failed', String(e));
     }
   }, 60000);
+  const watcher = silenceMs > 0 && onSilence ? setInterval(() => {
+    if (rec && !silenceTold && Date.now() - lastSpeech >= silenceMs) {
+      silenceTold = true;
+      log('speech', 'silence', Date.now() - lastSpeech);
+      onSilence();
+    }
+  }, Math.min(1000, silenceMs / 3)) : null;
+  const quit = () => { clearInterval(refresher); clearInterval(watcher); };
 
-  await new Promise((resolve, reject) => rec.startContinuousRecognitionAsync(resolve, (err) => {
-    clearInterval(refresher);
-    reject(new Error(String(err)));
-  }));
+  try {
+    await open();
+  } catch (e) {
+    quit();
+    throw e;
+  }
 
   let stopped = null;
   return {
+    /** Stops listening (and paying), keeping what was heard. */
+    pause() { log('speech', 'paused'); return close(); },
+    /** Listens again, on a new connection; throws if it cannot. */
+    async resume() { if (!rec && !stopped) { await open(); log('speech', 'resumed'); } },
     stop() {
-      if (!stopped) {
-        stopped = new Promise((resolve) => {
-          const done = () => { clearInterval(refresher); try { rec.close(); } catch { /* closed */ } resolve(finals); };
-          rec.stopContinuousRecognitionAsync(done, (err) => { log('speech', 'stop error', String(err)); done(); });
-        });
-      }
+      if (!stopped) stopped = close().then(() => { quit(); return finals; });
       return stopped;
     }
   };

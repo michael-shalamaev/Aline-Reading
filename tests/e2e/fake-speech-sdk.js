@@ -3,7 +3,9 @@
 //   { skip: [word indexes to leave out], mis: [indexes said badly], perWordMs: 25,
 //     cancelAt: word index where Microsoft drops the connection,
 //     replace: {word index: another word said instead},
-//     insert: {word index: [words said after it]} }
+//     insert: {word index: [words said after it]},
+//     silentAfter: index in the words said after which she goes quiet; the next recognizer
+//       (listening again after a pause) goes on from the word after it }
 (function () {
   const RECOGNIZED = 3;
 
@@ -27,23 +29,33 @@
         (plan.insert[i] || []).forEach((x) => words.push({ word: x, acc: 95, i: -1 }));
       });
       let segment = [];
+      const from = window.__fakeReadFrom || 0;
+      const quietAfter = plan.silentAfter;
+      if (quietAfter !== undefined) {
+        window.__fakeReadFrom = quietAfter + 1;
+        delete window.__fakeReading.silentAfter;
+      } else {
+        window.__fakeReadFrom = 0;
+      }
+      const last = quietAfter !== undefined ? quietAfter : words.length - 1;
       words.forEach((w, k) => {
+        if (k < from || k > last) return;
         if (plan.cancelAt !== undefined && k > plan.cancelAt) return;
         if (plan.cancelAt === k) {
           this.timers.push(setTimeout(() => this.canceled && this.canceled(this, {
             reason: 1, errorCode: 4, errorDetails: 'Connection was closed by the remote host'
-          }), (k + 1) * plan.perWordMs));
+          }), (k - from + 1) * plan.perWordMs));
           return;
         }
         this.timers.push(setTimeout(() => {
           segment.push(w);
           this.recognizing && this.recognizing(this, { result: { text: segment.map((x) => x.word).join(' ') } });
-          if (segment.length === 8 || k === words.length - 1) {
+          if (segment.length === 8 || k === last) {
             const done = segment;
             segment = [];
             this.recognized && this.recognized(this, { result: result(done) });
           }
-        }, (k + 1) * plan.perWordMs));
+        }, (k - from + 1) * plan.perWordMs));
       });
     }
     stopContinuousRecognitionAsync(ok) { this.timers.forEach(clearTimeout); setTimeout(ok, 10); }

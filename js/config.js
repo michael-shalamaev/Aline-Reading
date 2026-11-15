@@ -1,6 +1,6 @@
 // config.js — the only place with addresses and tuning numbers.
 
-export const VERSION = '1.1.3';
+export const VERSION = '1.1.4';
 
 // The Google Apps Script web app address (ends with /exec). Filled in during setup.
 export const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxyzKHmLY0kweEtL40FlUtBQxuHbUz0KkN08DhkoM6_o35-WIkE-hhev2rcR9W1Cbmp/exec';
@@ -25,8 +25,12 @@ export const MISPRONOUNCED_BELOW = 55;
 // Reading stops by itself this long after the last word was heard (ms).
 export const AUTO_STOP_AFTER_LAST_WORD_MS = 1800;
 
-// Safety stop for one page (ms).
+// Safety stop for one page (ms of listening; time paused does not count).
 export const MAX_PAGE_MS = 8 * 60 * 1000;
+
+// Nothing said for this long (ms): listening pauses, so Microsoft stops billing, until
+// she taps "continue". Any speech counts, also sounding a word out or trying it again.
+export const SILENCE_PAUSE_MS = 15000;
 
 // Requests to the script give up after this long (ms). Story creation is slow.
 export const API_TIMEOUT_MS = 60000;
