@@ -1,7 +1,7 @@
 // main.js — the flow between screens. Each screen function does one step and
 // hands over to the next. All server calls go through api.js, all speech through speech.js.
 
-import { VERSION, AUTO_STOP_AFTER_LAST_WORD_MS, MAX_PAGE_MS } from './config.js';
+import { VERSION, AUTO_STOP_AFTER_LAST_WORD_MS, MAX_PAGE_MS, SILENCE_PAUSE_MS } from './config.js';
 import { call, hasCode, ApiError, serverNow, sendOutbox, outboxSize } from './api.js';
 import { state, story, pageCount, nextStep } from './state.js';
 import { tokenize } from './text.js';
@@ -282,6 +282,9 @@ async function readingScreen(i, t0, started) {
   $('mic-state').className = 'mic';
   $('done-reading').textContent = 'סיימתי';
   $('done-reading').disabled = true;
+  $('resume-reading').hidden = true;
+  $('mic-state').hidden = false;
+  $('ready-banner').textContent = 'עכשיו אפשר להתחיל לקרוא! 🎤';
   $('page-text').classList.add('waiting');
   $('ready-banner').hidden = true;
   show('reading');
@@ -305,6 +308,65 @@ async function readingScreen(i, t0, started) {
   let session = null;
   let listenedAt = 0;
   let interrupted = false; // Microsoft stopped listening: nothing of this reading counts
+  let paused = false;      // listening paused after a silence, until she taps "continue"
+  let pausedAt = 0;
+  let pausedMs = 0;
+  const listeningMs = () => performance.now() - listenedAt - pausedMs - (paused ? performance.now() - pausedAt : 0);
+  const showPaused = (on) => {
+    $('resume-reading').hidden = !on;
+    $('mic-state').hidden = on;
+    $('ready-banner').textContent = on ? 'עצרנו להקשיב כי היה שקט. לוחצים "להמשיך לקרוא" וממשיכים מאותה מילה.' : 'עכשיו אפשר להתחיל לקרוא! 🎤';
+    $('ready-banner').hidden = !on;
+  };
+
+  // Microsoft stopped listening in the middle (connection, quota): this reading is not
+  // counted and not sent. She reads the page again, without losing her second try.
+  const interrupt = (details) => {
+    reportError('reading: speech stopped', new Error(String(details)), 'reading');
+    if (finished) return;
+    finished = true;
+    interrupted = true;
+    clearTimeout(safety);
+    clearTimeout(autoStop);
+    if (session) session.stop();
+    showPaused(false);
+    $('ready-banner').hidden = true;
+    $('mic-state').textContent = 'ההקשבה נקטעה, והקריאה הזו לא נספרת. לוחצים "לקרוא שוב"';
+    $('mic-state').className = 'mic';
+    $('done-reading').textContent = 'לקרוא שוב';
+    $('done-reading').disabled = false;
+    $('done-reading').onclick = () => beginPage(i);
+  };
+
+  // Nothing said for a while: stop listening (Microsoft bills by the time it listens).
+  const pauseListening = () => {
+    if (finished || paused || !session) return;
+    paused = true;
+    pausedAt = performance.now();
+    clearTimeout(safety);
+    session.pause();
+    showPaused(true);
+  };
+  const resumeListening = async () => {
+    if (finished || !paused) return;
+    $('resume-reading').disabled = true;
+    try {
+      await session.resume();
+    } catch (e) {
+      $('resume-reading').disabled = false;
+      return interrupt(e && e.message);
+    } finally {
+      $('resume-reading').disabled = false;
+    }
+    if (finished) return;
+    pausedMs += performance.now() - pausedAt;
+    paused = false;
+    showPaused(false);
+    safety = setTimeout(() => finishPage(), Math.max(0, MAX_PAGE_MS - listeningMs()));
+    $('mic-state').textContent = 'מקשיבים… קוראים בקול';
+    $('mic-state').className = 'mic on';
+  };
+  $('resume-reading').onclick = resumeListening;
   // The server refused or could not start the page: stop listening and deal with it.
   let aborted = false;
   const abort = async (e, r) => {
@@ -332,22 +394,9 @@ async function readingScreen(i, t0, started) {
           autoStop = setTimeout(() => finishPage(), AUTO_STOP_AFTER_LAST_WORD_MS);
         }
       },
-      onProblem: (details) => {
-        // Microsoft stopped listening in the middle (connection, quota): this reading is not
-        // counted and not sent. She reads the page again, without losing her second try.
-        reportError('reading: speech stopped', new Error(String(details)), 'reading');
-        if (finished) return;
-        finished = true;
-        interrupted = true;
-        clearTimeout(safety);
-        clearTimeout(autoStop);
-        if (session) session.stop();
-        $('mic-state').textContent = 'ההקשבה נקטעה, והקריאה הזו לא נספרת. לוחצים "לקרוא שוב"';
-        $('mic-state').className = 'mic';
-        $('done-reading').textContent = 'לקרוא שוב';
-        $('done-reading').disabled = false;
-        $('done-reading').onclick = () => beginPage(i);
-      }
+      onProblem: interrupt,
+      onSilence: pauseListening,
+      silenceMs: SILENCE_PAUSE_MS
     });
   } catch (e) {
     clearTimeout(safety);
@@ -374,11 +423,13 @@ async function readingScreen(i, t0, started) {
     finished = true;
     clearTimeout(safety);
     clearTimeout(autoStop);
+    const durSec = Math.round(listeningMs() / 100) / 10; // time paused after a silence is not reading time
+    showPaused(false);
+    $('ready-banner').hidden = true;
     $('mic-state').textContent = 'בודקים…';
     $('mic-state').className = 'mic';
     $('done-reading').disabled = true;
     const heard = await session.stop();
-    const durSec = Math.round((performance.now() - listenedAt) / 100) / 10;
     const { statuses, insertions, said, extraWords } = alignPage(ref, heard, state.hinted, state.child.pronThreshold ?? undefined);
     log('score', 'aligned', { heard: heard.length, insertions, said, extraWords, statuses: statuses.join(',') });
     // The phone counts exactly like the server (same rules, tested), so the result and the

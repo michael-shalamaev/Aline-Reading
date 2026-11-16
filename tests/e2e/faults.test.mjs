@@ -484,3 +484,30 @@ test('one phone can switch servers with its link (remembered); the others stay o
     assert.equal(app.calls.at(-1).host, 'script.test');
   } finally { await app.close(); }
 });
+
+test('quiet for a while: listening pauses (no billing); "continue" goes on from the same word, and the page counts whole', async () => {
+  const app = await startApp({ silenceMs: 700 });
+  try {
+    await toFirstPage(app);
+    await app.page.evaluate(() => { window.__fakeReadFrom = 0; window.__fakeReading = { skip: [], mis: [], silentAfter: 9 }; });
+    const t0 = Date.now();
+    await app.page.click('#go-read');
+    await app.screen('reading');
+    await app.page.waitForSelector('#resume-reading:not([hidden])', { timeout: 5000 });
+    assert.equal(await app.page.isVisible('#mic-state'), false);
+    assert.match(await app.page.textContent('#ready-banner'), /היה שקט/);
+    await app.shot('f4-paused-after-silence');
+    await app.page.waitForTimeout(3000); // a long pause: not reading time
+    await app.page.click('#resume-reading');
+    await app.page.waitForSelector('#resume-reading', { state: 'hidden' });
+    await app.screen('result', 15000);
+    const wallSec = (Date.now() - t0) / 1000;
+    await app.page.waitForTimeout(600);
+    assert.equal(app.calls.filter((c) => c.action === 'submitPage').length, 1);
+    assert.equal(await app.page.textContent('#result-score'), '100%', 'the words read before and after the pause all count');
+    await app.mails(); // lets the rows reach the sheet
+    const row = app.server.book().getSheetByName('עמודים').rows().slice(1).pop();
+    assert.ok(row[12] <= wallSec - 2.5, `paused time is not reading time: ${row[12]}s of ${wallSec}s`);
+    assert.deepEqual(app.errors, []);
+  } finally { await app.close(); }
+});

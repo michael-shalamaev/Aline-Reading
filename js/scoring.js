@@ -40,9 +40,11 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
 
   const statuses = new Array(n).fill('om');
   const unmatchedHeard = [];
+  const pageAt = {}; // heard index where a page word was (first) said -> that page word's index
   let i = 0, j = 0;
   while (i < n && j < m) {
     if (sameWord(R[i], H[j], L[i]) && dp[i][j] === dp[i + 1][j + 1] + 1) {
+      pageAt[j] = i;
       // Said again right away (a self-correction, not a word the text repeats): the better try counts.
       let h = heard[j];
       while (j + 1 < m && sameWord(R[i], H[j + 1], L[i]) && !(i + 1 < n && sameWord(R[i + 1], H[j + 1], L[i + 1]))) {
@@ -61,14 +63,14 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
   }
   while (j < m) unmatchedHeard.push({ j: j++, near: n });
 
-  // Extra words: fillers are ignored, and so is going back to read a few words again
-  // ("the little creature... the little creature through"), or a hint word said after
-  // hearing it: a word of the text close behind (or just ahead of) the place is no error.
-  const REREAD_BACK = 15, REREAD_AHEAD = 2;
+  // Extra words: fillers are ignored, and so is any word of the page itself: going back to
+  // read again ("the little creature... the little creature through"), even from further
+  // back, or a hint word said after hearing it, is no error.
+  const fragments = soundingOut(H, unmatchedHeard, pageAt, R, statuses);
   const extra = unmatchedHeard.filter((u) => {
     const w = H[u.j];
-    if (!w || FILLERS.has(w)) return false;
-    for (let k = Math.max(0, u.near - REREAD_BACK); k <= Math.min(n - 1, u.near + REREAD_AHEAD); k++) {
+    if (!w || FILLERS.has(w) || fragments.has(u.j)) return false;
+    for (let k = 0; k < n; k++) {
       if (sameWord(R[k], w, L[k])) return false;
     }
     return true;
@@ -103,6 +105,34 @@ export function alignPage(ref, heard, hinted = new Set(), misBelow = MISPRONOUNC
 
   hinted.forEach((k) => { if (k >= 0 && k < n) statuses[k] = 'hint'; });
   return { statuses, insertions, said, extraWords };
+}
+
+/**
+ * Sounding a long word out ("el… e… phant… elephant"): the recognizer turns the pieces into
+ * short words of their own. Heard words just before a long page word that was then said,
+ * starting with its first letter and together not much longer than it, are pieces of it.
+ * Returns the heard indexes that are such pieces.
+ */
+const LONG_WORD = 5;
+function soundingOut(H, unmatchedHeard, pageAt, R, statuses) {
+  const pieces = new Set();
+  const loose = new Set(unmatchedHeard.map((u) => u.j));
+  for (const [jStr, k] of Object.entries(pageAt)) {
+    const j = Number(jStr);
+    const target = R[k];
+    if (target.length < LONG_WORD || statuses[k] === 'om') continue;
+    let start = j; // walk back over the extra words right before it
+    let letters = 0;
+    let best = j;
+    while (start - 1 >= 0 && loose.has(start - 1)) {
+      start--;
+      letters += H[start].length;
+      if (letters > target.length + 3) break;
+      if (H[start][0] === target[0]) best = start;
+    }
+    for (let t = best; t < j; t++) pieces.add(t);
+  }
+  return pieces;
 }
 
 /** Below the bar for one page? Same rule as server/Scoring.gs pageBelowBar. */
